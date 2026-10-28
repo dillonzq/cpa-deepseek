@@ -49,7 +49,7 @@ The plugin ID is `cpa-deepseek`. The provider ID, credential type and default mo
 
 ## Install
 
-Choose the operating system and architecture **running CPA**, including its container environment. Download the matching archive from [GitHub Releases](https://github.com/dillonzq/cpa-deepseek/releases) and verify it against the attached `SHA256SUMS`. Before the first release, use a successful [Actions build artifact](https://github.com/dillonzq/cpa-deepseek/actions/workflows/build.yml), or [build locally](#build).
+Choose the operating system and architecture **running CPA**, including its container environment. Download the matching ZIP from [GitHub Releases](https://github.com/dillonzq/cpa-deepseek/releases) and verify it against the attached `checksums.txt`. ZIPs use the store-compatible name `cpa-deepseek_<version>_<goos>_<goarch>.zip`, for example `cpa-deepseek_0.1.0_linux_amd64.zip`. Before the first release, use a successful [Actions build artifact](https://github.com/dillonzq/cpa-deepseek/actions/workflows/build.yml), or [build locally](#build).
 
 | CPA host | Architecture | Library |
 | --- | --- | --- |
@@ -265,7 +265,7 @@ CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.so .
 
 On macOS, use `dist/cpa-deepseek.dylib`. On Windows, run `go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.dll .` with `CGO_ENABLED=1` and an available C compiler.
 
-Version metadata defaults to `0.0.0-dev`. Inject a version with `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'`, or run `bash scripts/package.sh v0.1.0` to build a versioned archive in `dist/` for the current Go target. CI defines Linux/macOS amd64 and arm64 builds, plus Windows amd64. Build artifacts include both READMEs, the sample configuration, license and icon source notes. Tag builds also prepare a draft GitHub Release with all five archives and SHA-256 checksums; see [the release procedure](RELEASE.md).
+Version metadata defaults to `0.0.0-dev`. Inject a version with `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'`, or run `bash scripts/package.sh v0.1.0` (requires Python 3) to build `dist/cpa-deepseek_0.1.0_<goos>_<goarch>.zip` for the current Go target, with the dynamic library at the ZIP root. CI defines Linux/macOS amd64 and arm64 builds, plus Windows amd64. Build artifacts include both READMEs, the sample configuration, license and icon source notes. Branch and pull request packages use `0.0.0`; tag builds prepare a draft GitHub Release with all five ZIPs and SHA-256 entries in `checksums.txt`; see [the release procedure](RELEASE.md).
 
 ## Testing
 

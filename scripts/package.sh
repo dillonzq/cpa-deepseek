@@ -6,7 +6,7 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
   exit 1
 fi
 version="${1#v}"
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Invalid version: $1" >&2
   exit 1
 fi
@@ -25,29 +25,26 @@ case "$target_os" in
   *) echo "Unsupported operating system: $target_os" >&2; exit 1 ;;
 esac
 
-package="cpa-deepseek-v${version}-${target_os}-${target_arch}"
+package="cpa-deepseek_${version}_${target_os}_${target_arch}"
 staging="$(mktemp -d "$output/.package.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
-mkdir -p "$staging/$package"
 CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
   -ldflags "-s -w -X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=$version" \
-  -o "$staging/$package/cpa-deepseek.$extension" .
-cp README.md README.zh-CN.md LICENSE config.example.yaml "$staging/$package/"
-cp -R assets "$staging/$package/assets"
+  -o "$staging/cpa-deepseek.$extension" .
+cp README.md README.zh-CN.md LICENSE config.example.yaml "$staging/"
+cp -R assets "$staging/assets"
 
-if [[ "$target_os" == windows ]]; then
-  # Python is available on GitHub's Windows runner; avoid a dependency on zip.exe.
-  python - "$staging" "$package" "$output" <<'PY'
+# Use the same zip layout on every platform without requiring zip.exe.
+python=python3
+if ! command -v "$python" >/dev/null 2>&1; then python=python; fi
+"$python" - "$staging" "$package" "$output" <<'PY'
 import pathlib
 import sys
 import zipfile
 
 staging, package, output = sys.argv[1:]
 with zipfile.ZipFile(pathlib.Path(output) / (package + ".zip"), "w", zipfile.ZIP_DEFLATED) as archive:
-    for path in sorted((pathlib.Path(staging) / package).rglob("*")):
+    for path in sorted(pathlib.Path(staging).rglob("*")):
         if path.is_file():
-            archive.write(path, path.relative_to(staging))
+            archive.write(path, path.relative_to(staging).as_posix())
 PY
-else
-  tar -czf "$output/$package.tar.gz" -C "$staging" "$package"
-fi

@@ -62,15 +62,16 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          version=0.0.0-dev
-          if [[ "$REF_TYPE" == tag ]]; then version="${REF_NAME#v}"; fi
+          version=0.0.0
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            version="${REF_NAME#v}"
+          fi
           bash scripts/package.sh "$version"
       - uses: actions/upload-artifact@v4
         with:
           name: cpa-deepseek-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
+          path: dist/*.zip
           if-no-files-found: error
 
   release:
@@ -92,16 +93,37 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          version="${RELEASE_TAG#v}"
           expected=(
-            "cpa-deepseek-${RELEASE_TAG}-linux-amd64.tar.gz"
-            "cpa-deepseek-${RELEASE_TAG}-linux-arm64.tar.gz"
-            "cpa-deepseek-${RELEASE_TAG}-darwin-amd64.tar.gz"
-            "cpa-deepseek-${RELEASE_TAG}-darwin-arm64.tar.gz"
-            "cpa-deepseek-${RELEASE_TAG}-windows-amd64.zip"
+            "cpa-deepseek_${version}_linux_amd64.zip"
+            "cpa-deepseek_${version}_linux_arm64.zip"
+            "cpa-deepseek_${version}_darwin_amd64.zip"
+            "cpa-deepseek_${version}_darwin_arm64.zip"
+            "cpa-deepseek_${version}_windows_amd64.zip"
           )
           for archive in "${expected[@]}"; do test -s "$archive"; done
-          sha256sum "${expected[@]}" > SHA256SUMS
-          sha256sum --check SHA256SUMS
+          python3 - "${expected[@]}" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          extensions = {"linux": ".so", "darwin": ".dylib", "windows": ".dll"}
+          for filename in sys.argv[1:]:
+              target_os = pathlib.Path(filename).stem.split("_")[-2]
+              library = "cpa-deepseek" + extensions[target_os]
+              with zipfile.ZipFile(filename) as archive:
+                  assert archive.testzip() is None, f"Corrupt zip: {filename}"
+                  libraries = []
+                  for entry in archive.infolist():
+                      path = pathlib.PurePosixPath(entry.filename)
+                      assert not path.is_absolute() and ".." not in path.parts and ":" not in entry.filename and "\\" not in entry.filename, f"Unsafe path: {entry.filename}"
+                      if path.suffix.lower() in extensions.values():
+                          assert not entry.is_dir() and entry.file_size > 0, f"Empty library: {entry.filename}"
+                          libraries.append(entry.filename)
+                  assert libraries == [library], f"Expected only root library {library}: {libraries}"
+          PY
+          sha256sum "${expected[@]}" > checksums.txt
+          sha256sum --check checksums.txt
       - name: Create release draft
         env:
           GH_TOKEN: ${{ github.token }}
