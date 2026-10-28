@@ -38,11 +38,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: linux, arch: amd64, runner: ubuntu-24.04, ext: so}
-          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm, ext: so}
-          - {os: darwin, arch: amd64, runner: macos-15-intel, ext: dylib}
-          - {os: darwin, arch: arm64, runner: macos-15, ext: dylib}
-          - {os: windows, arch: amd64, runner: windows-2025, ext: dll}
+          - {os: linux, arch: amd64, runner: ubuntu-24.04}
+          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {os: darwin, arch: amd64, runner: macos-15-intel}
+          - {os: darwin, arch: arm64, runner: macos-15}
+          - {os: windows, arch: amd64, runner: windows-2025}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -53,26 +53,69 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Build shared library
+      - name: Build release archive
         env:
           CGO_ENABLED: '1'
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-          LIB_EXT: ${{ matrix.ext }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           version=0.0.0-dev
           if [[ "$REF_TYPE" == tag ]]; then version="${REF_NAME#v}"; fi
-          mkdir -p dist
-          go build -trimpath -buildmode=c-shared \
-            -ldflags "-s -w -X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=$version" \
-            -o "dist/cpa-deepseek.$LIB_EXT" .
-          cp README.md README.zh-CN.md LICENSE config.example.yaml dist/
-          cp -R assets dist/assets
+          bash scripts/package.sh "$version"
       - uses: actions/upload-artifact@v4
         with:
           name: cpa-deepseek-${{ matrix.os }}-${{ matrix.arch }}
-          path: dist/
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cpa-deepseek-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify packages and create checksums
+        working-directory: release-assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "cpa-deepseek-${RELEASE_TAG}-linux-amd64.tar.gz"
+            "cpa-deepseek-${RELEASE_TAG}-linux-arm64.tar.gz"
+            "cpa-deepseek-${RELEASE_TAG}-darwin-amd64.tar.gz"
+            "cpa-deepseek-${RELEASE_TAG}-darwin-arm64.tar.gz"
+            "cpa-deepseek-${RELEASE_TAG}-windows-amd64.zip"
+          )
+          for archive in "${expected[@]}"; do test -s "$archive"; done
+          sha256sum "${expected[@]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Create release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes="docs/releases/${RELEASE_TAG}.md"
+          test -s "$notes"
+          # Never replace assets in an already published release on a rerun.
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+            python -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Release is already published"'
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --verify-tag --draft --title "$RELEASE_TAG" --notes-file "$notes"
+          fi
