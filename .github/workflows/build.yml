@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Download SDK host dependencies
+        run: go mod download all
+      - name: Formatting
+        run: test -z "$(gofmt -l main.go internal tests)"
+      - name: Unit tests
+        run: go test ./...
+      - name: Race detector
+        run: go test -race ./internal/...
+      - name: Vet
+        run: go vet -tags debug ./...
+      - name: Native CPA v8 integration
+        run: go test -tags debug ./...
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: linux, arch: amd64, runner: ubuntu-24.04, ext: so}
+          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm, ext: so}
+          - {os: darwin, arch: amd64, runner: macos-15-intel, ext: dylib}
+          - {os: darwin, arch: arm64, runner: macos-15, ext: dylib}
+          - {os: windows, arch: amd64, runner: windows-2025, ext: dll}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build shared library
+        env:
+          CGO_ENABLED: '1'
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          LIB_EXT: ${{ matrix.ext }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=0.0.0-dev
+          if [[ "$REF_TYPE" == tag ]]; then version="${REF_NAME#v}"; fi
+          mkdir -p dist
+          go build -trimpath -buildmode=c-shared \
+            -ldflags "-s -w -X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=$version" \
+            -o "dist/cpa-deepseek.$LIB_EXT" .
+          cp README.md README.zh-CN.md LICENSE config.example.yaml dist/
+          cp -R assets dist/assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpa-deepseek-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error

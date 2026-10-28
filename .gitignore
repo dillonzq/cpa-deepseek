@@ -1,0 +1,7 @@
+/dist/
+/plugins/
+*.log
+.env
+.env.*
+!.env.example
+coverage.out

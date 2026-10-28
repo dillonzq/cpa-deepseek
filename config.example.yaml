@@ -1,0 +1,34 @@
+config-version: 8
+plugins:
+  enabled: true
+  configs:
+    cpa-deepseek:
+      enabled: true
+      credentials:
+        - name: Personal
+          api-key: "${DEEPSEEK_API_KEY}"
+        - name: Team
+          api-key: "${DEEPSEEK_TEAM_API_KEY}"
+      base-url: https://api.deepseek.com
+      model-prefix:
+        enabled: true
+        value: deepseek
+      catalog:
+        refresh-interval: 15m
+        stale-while-unavailable: true
+      quota:
+        timeout: 15s
+      request-timeout: 15m
+      max-response-bytes: 67108864
+      # Optional: add models or override metadata returned by /models.
+      # 可选：补充模型或覆盖 /models 返回的元数据。
+      # models:
+      #   - name: deepseek-flash
+      #     display-name: DeepSeek Flash
+      #     max-context-length: 1048576
+      #     max-tokens: 393216
+      #     input-modalities: [text, image]
+      #     output-modalities: [text]
+      #     thinking:
+      #       zero-allowed: true
+      #       levels: [low, high, max]
