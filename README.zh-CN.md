@@ -1,7 +1,7 @@
 # cpa-deepseek
 
 <p align="center">
-  <img src="assets/logo.svg" alt="DeepSeek" width="180">
+  <img src="assets/logo.svg" alt="DeepSeek" width="200" height="200">
 </p>
 
 <p align="center">
@@ -287,4 +287,4 @@ Linux/macOS debug 集成测试通过临时 Go source overlay 将真实动态库�
 
 ## 许可证与图标来源
 
-插件代码使用 [MIT 许可证](LICENSE)。DeepSeek 图标原样取自[官方 API 文档 favicon](https://api-docs.deepseek.com/img/favicon.svg)。中英文 README 使用[本地 SVG](assets/logo.svg)，CPA 插件元数据使用官方图标 URL；完整来源和权利说明见[图标资源说明](assets/README.md)。本项目为独立集成，不代表 DeepSeek 官方背书。
+插件代码使用 [MIT 许可证](LICENSE)。DeepSeek 图标将[官方 API 文档 favicon](https://api-docs.deepseek.com/img/favicon.svg) 原样（图形和颜色不变）置于白色方形画布上，提供 [SVG](assets/logo.svg) 和 [PNG](assets/logo.png) 两种格式，CPA 插件元数据使用 PNG；完整来源和权利说明见[图标资源说明](assets/README.md)。本项目为独立集成，不代表 DeepSeek 官方背书。

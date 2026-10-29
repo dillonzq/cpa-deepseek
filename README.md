@@ -1,7 +1,7 @@
 # cpa-deepseek
 
 <p align="center">
-  <img src="assets/logo.svg" alt="DeepSeek" width="180">
+  <img src="assets/logo.svg" alt="DeepSeek" width="200" height="200">
 </p>
 
 <p align="center">
@@ -287,4 +287,4 @@ Default tests use no real DeepSeek key and make no paid calls. Live inference an
 
 ## License and icon source
 
-Plugin code: [MIT](LICENSE). The DeepSeek icon is copied unchanged from the [official API documentation favicon](https://api-docs.deepseek.com/img/favicon.svg). Both READMEs use [the local SVG](assets/logo.svg); CPA's plugin metadata uses the official asset URL. See [asset notes](assets/README.md) for provenance and rights information. This is an independent integration and does not imply DeepSeek endorsement.
+Plugin code: [MIT](LICENSE). The DeepSeek icon places the [official API documentation favicon](https://api-docs.deepseek.com/img/favicon.svg), with its shape and color unchanged, on a square white canvas. It is available as [SVG](assets/logo.svg) and [PNG](assets/logo.png); CPA's plugin metadata uses the PNG. See [asset notes](assets/README.md) for provenance and rights information. This is an independent integration and does not imply DeepSeek endorsement.
