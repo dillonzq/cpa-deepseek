@@ -34,7 +34,7 @@
 ## 功能
 
 - **官方模型发现**：从 DeepSeek `/models` 接口读取模型、上下文和输出上限、模态与推理级别，支持显式覆盖元数据。
-- **四种客户端协议**：原生支持 Chat Completions、Responses、Anthropic Messages，通过 [apix](https://github.com/dillonzq/apix/tree/v0.1.0) 转换 Gemini GenerateContent；均支持普通和流式请求。
+- **四种客户端协议**：原生支持 Chat Completions、Responses、Anthropic Messages，通过 [apix](https://github.com/dillonzq/apix/tree/v0.2.0) 转换 Gemini GenerateContent；均支持普通和流式请求。
 - **工具与推理**：保留原生工具定义、工具结果、`reasoning_content`、模型支持的图片输入及协议扩展字段，处理 DeepSeek thinking 控制和 CPA 模型名后缀。
 - **多组命名凭证**：根据 key 生成稳定身份，严格使用选中凭证执行，各协议共用 CPA 调度状态。
 - **CPA v8 原生 quota**：实时查询选中凭证的账户余额，分别显示 CNY/USD 金额与账户可用状态。
