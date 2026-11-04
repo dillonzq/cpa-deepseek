@@ -146,7 +146,11 @@ models:
 
 ## 模型与协议
 
-模型发现使用配置凭证调用官方 [`GET /models`](https://api-docs.deepseek.com/zh-cn/api/list-models/)，某次失败时尝试下一个 key。单次尝试最多 3 秒，完整刷新最多 10 秒，不修改执行冷却。开启 stale serving 时，失败会保留最近成功快照；关闭后只保留显式模型声明。
+模型发现使用配置凭证调用官方 [`GET /models`](https://api-docs.deepseek.com/zh-cn/api/list-models/)，某次失败时尝试下一个 key。单次尝试最多 3 秒，完整刷新最多 10 秒，不重写凭据文件。开启 stale serving 时，失败会保留最近成功快照；关闭后只保留显式模型声明。
+
+启动或重新配置时，如果模型发现失败且没有手动声明或可用缓存，会返回 `model_discovery_failed`。错误会区分 HTTP 状态、超时、传输故障以及无效或空响应，不包含密钥或上游响应正文；后台发现失败也会记录原因。
+
+定时刷新会更新插件内部快照。当前 CPA SDK 没有更新宿主模型注册表的回调，因此快照发生变化时，插件会记录重新加载提示。需要重新加载或重新配置插件，才能将这些变化发布到 `/v1/models`。
 
 模型通过发现接口获取，不硬编码列表。当前官方示例主要使用 `deepseek-flash` 和 `deepseek-v4-pro`，实际请求请以 CPA `/v1/models` 返回的 ID 为准。
 

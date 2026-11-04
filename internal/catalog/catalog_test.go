@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -110,5 +111,32 @@ func TestExplicitThinkingOverrideWinsOverDiscovery(t *testing.T) {
 	r, _ := m.Lookup("deepseek/deepseek-flash")
 	if r.Thinking == nil || r.Thinking.ZeroAllowed || slices.Contains(r.Thinking.Levels, "none") {
 		t.Fatal("discovery overrode explicit thinking metadata")
+	}
+}
+
+func TestDiscoveryErrorsAreUsefulAndRedacted(t *testing.T) {
+	cfg, _ := config.Load([]byte("api-keys: [{value: secret-key}]\n"))
+	for _, tc := range []struct {
+		name     string
+		response pluginapi.HTTPResponse
+		err      error
+		want     string
+	}{
+		{"unauthorized", pluginapi.HTTPResponse{StatusCode: 401, Body: []byte("secret-key")}, nil, "HTTP 401"},
+		{"transport", pluginapi.HTTPResponse{}, errors.New("secret-key in upstream error"), "transport failure"},
+		{"timeout", pluginapi.HTTPResponse{}, context.DeadlineExceeded, "request timed out"},
+		{"invalid-json", pluginapi.HTTPResponse{StatusCode: 200, Body: []byte("secret-key")}, nil, "invalid model response"},
+		{"empty-list", pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"data":[]}`)}, nil, "invalid model count (0)"},
+		{"invalid-id", pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"data":[{"id":"bad id secret-key"}]}`)}, nil, "invalid or duplicate model ID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(cfg, catalogClient(func(context.Context, pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+				return tc.response, tc.err
+			}))
+			err := m.Refresh(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "secret-key") {
+				t.Fatalf("unsafe or unhelpful error: %v", err)
+			}
+		})
 	}
 }

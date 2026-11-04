@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,8 @@ const pluginName = "cpa-deepseek"
 const pluginDisplayName = "DeepSeek"
 
 var pluginVersion = "0.0.0-dev"
+
+var initialDiscoveryTimeout = 10 * time.Second
 
 type Manager struct {
 	bridge     *HostBridge
@@ -179,11 +182,6 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	}
 	m.lifeMu.Lock()
 	defer m.lifeMu.Unlock()
-	ctx, cancel := context.WithTimeout(m.workContext(), 10*time.Second)
-	defer cancel()
-	if err := m.materializeAuthRecords(ctx, cfg); err != nil {
-		return ErrEnvelope("auth_materialization_failed", err.Error()), nil
-	}
 	var client catalog.HostClient
 	if m.bridge != nil {
 		client = m.bridge
@@ -195,8 +193,23 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	if cfg.Catalog.StaleWhileUnavailable {
 		catalogue.SeedFrom(previous)
 	}
-	if err := catalogue.Refresh(ctx); err != nil && m.bridge != nil {
-		_ = m.bridge.Log("warn", "DeepSeek model discovery unavailable; serving configured or last known models", nil)
+	discoveryCtx, cancelDiscovery := context.WithTimeout(m.workContext(), initialDiscoveryTimeout)
+	discoveryErr := catalogue.Refresh(discoveryCtx)
+	cancelDiscovery()
+	if err := discoveryErr; err != nil {
+		if len(catalogue.Models()) == 0 {
+			return ErrEnvelope("model_discovery_failed", err.Error()), nil
+		}
+		if m.bridge != nil {
+			_ = m.bridge.Log("warn", "DeepSeek model discovery failed; serving configured or last known models", map[string]any{"reason": err.Error()})
+		}
+	}
+	// Discovery may exhaust its deadline while configured or cached models
+	// remain usable. Give credential initialization its own bounded context.
+	ctx, cancel := context.WithTimeout(m.workContext(), 10*time.Second)
+	defer cancel()
+	if err := m.materializeAuthRecords(ctx, cfg); err != nil {
+		return ErrEnvelope("auth_materialization_failed", err.Error()), nil
 	}
 	if done := m.closeStop(); done != nil {
 		<-done
@@ -325,11 +338,23 @@ func (m *Manager) startRefreshLoop(cfg config.Config, catalogue *catalog.Manager
 				return
 			case <-ticker.C:
 				attempt, release := context.WithTimeout(ctx, 10*time.Second)
-				_ = catalogue.Refresh(attempt)
+				m.refreshCatalog(attempt, catalogue)
 				release()
 			}
 		}
 	}()
+}
+
+// refreshCatalog updates the local snapshot. The SDK has no callback to
+// invalidate the host registry, so changes require a plugin reload.
+func (m *Manager) refreshCatalog(ctx context.Context, catalogue *catalog.Manager) {
+	previous := catalogue.Models()
+	if err := catalogue.Refresh(ctx); err != nil && m.bridge != nil {
+		_ = m.bridge.Log("warn", "DeepSeek model discovery failed", map[string]any{"reason": err.Error()})
+	}
+	if m.bridge != nil && !reflect.DeepEqual(previous, catalogue.Models()) {
+		_ = m.bridge.Log("warn", "DeepSeek model catalog changed; reload the plugin to update the host model list", nil)
+	}
 }
 
 func okEnvelope(result any) []byte {

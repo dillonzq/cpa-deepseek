@@ -4,6 +4,7 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -99,46 +100,71 @@ func (m *Manager) SeedFrom(previous *Manager) {
 func (m *Manager) Refresh(ctx context.Context) error {
 	m.refreshMu.Lock()
 	defer m.refreshMu.Unlock()
+	failures := []string{}
 	if m.client == nil {
-		return fmt.Errorf("catalog transport unavailable")
-	}
-	for _, key := range m.cfg.Credentials {
-		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
-		resp, err := m.client.Do(attempt, pluginapi.HTTPRequest{Method: http.MethodGet,
-			URL:     JoinUpstreamURL(m.cfg.BaseURL, "/models"),
-			Headers: http.Header{"Authorization": {"Bearer " + key.Value}, "Accept": {"application/json"}}})
-		cancel()
-		if ctx.Err() != nil {
-			break
-		}
-		if err != nil || resp.StatusCode != http.StatusOK || len(resp.Body) > 4<<20 {
-			continue
-		}
-		var wire struct {
-			Data []rawModel `json:"data"`
-		}
-		if json.Unmarshal(resp.Body, &wire) != nil || wire.Data == nil || len(wire.Data) > 4096 {
-			continue
-		}
-		seen := map[string]bool{}
-		valid := true
-		for _, model := range wire.Data {
-			if !validID.MatchString(model.ID) || seen[model.ID] || model.Context != nil && *model.Context < 0 || model.Output != nil && *model.Output < 0 {
-				valid = false
-				break
+		failures = append(failures, "transport unavailable")
+	} else {
+		for i, key := range m.cfg.Credentials {
+			attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
+			resp, err := m.client.Do(attempt, pluginapi.HTTPRequest{Method: http.MethodGet,
+				URL:     JoinUpstreamURL(m.cfg.BaseURL, "/models"),
+				Headers: http.Header{"Authorization": {"Bearer " + key.Value}, "Accept": {"application/json"}}})
+			attemptErr := attempt.Err()
+			cancel()
+			reason := ""
+			switch {
+			case errors.Is(ctx.Err(), context.Canceled):
+				reason = "refresh canceled"
+			case errors.Is(ctx.Err(), context.DeadlineExceeded):
+				reason = "refresh deadline exceeded"
+			case errors.Is(attemptErr, context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+				reason = "request timed out"
+			case err != nil:
+				reason = "transport failure"
+			case resp.StatusCode != http.StatusOK:
+				reason = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			case len(resp.Body) > 4<<20:
+				reason = "response exceeds 4 MiB"
 			}
-			seen[model.ID] = true
+			if reason != "" {
+				failures = append(failures, fmt.Sprintf("key[%d]: %s", i, reason))
+				if ctx.Err() != nil {
+					break
+				}
+				continue
+			}
+			var wire struct {
+				Data []rawModel `json:"data"`
+			}
+			if json.Unmarshal(resp.Body, &wire) != nil || wire.Data == nil {
+				failures = append(failures, fmt.Sprintf("key[%d]: invalid model response", i))
+				continue
+			}
+			if len(wire.Data) == 0 || len(wire.Data) > 4096 {
+				failures = append(failures, fmt.Sprintf("key[%d]: invalid model count (%d)", i, len(wire.Data)))
+				continue
+			}
+			seen := map[string]bool{}
+			valid := true
+			for _, model := range wire.Data {
+				if !validID.MatchString(model.ID) || seen[model.ID] || model.Context != nil && *model.Context < 0 || model.Output != nil && *model.Output < 0 {
+					valid = false
+					break
+				}
+				seen[model.ID] = true
+			}
+			if !valid {
+				failures = append(failures, fmt.Sprintf("key[%d]: invalid or duplicate model ID or token limits", i))
+				continue
+			}
+			m.swap(wire.Data)
+			return nil
 		}
-		if !valid {
-			continue
-		}
-		m.swap(wire.Data)
-		return nil
 	}
 	if !m.cfg.Catalog.StaleWhileUnavailable {
 		m.swap(nil)
 	}
-	return fmt.Errorf("DeepSeek model discovery unavailable")
+	return fmt.Errorf("DeepSeek model discovery unavailable: %s", strings.Join(failures, "; "))
 }
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)

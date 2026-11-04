@@ -146,7 +146,11 @@ Explicit fields override discovered metadata. A declaration can also add a model
 
 ## Models and protocols
 
-Discovery calls the official [`GET /models`](https://api-docs.deepseek.com/api/list-models/) using configured keys, trying another key if an attempt fails. Each attempt is limited to 3 seconds, and the complete refresh to 10 seconds. Discovery does not change execution cooldowns. With stale serving enabled, a failed refresh retains the last successful snapshot; otherwise only explicit model declarations remain.
+Discovery calls the official [`GET /models`](https://api-docs.deepseek.com/api/list-models/) using configured keys, trying another key if an attempt fails. Each attempt is limited to 3 seconds, and the complete refresh to 10 seconds. Discovery does not write credential files. With stale serving enabled, a failed refresh retains the last successful snapshot; otherwise only explicit model declarations remain.
+
+Startup or reconfiguration fails with `model_discovery_failed` when discovery fails and no configured or cached models are available. Discovery errors distinguish HTTP status, timeouts, transport failures, and malformed or empty responses without including credentials or upstream bodies. Background refresh failures are logged.
+
+Periodic refresh updates the plugin's local snapshot. The current CPA SDK has no callback to update the host model registry, so the plugin logs a reload warning when the snapshot changes. Reload/reconfigure the plugin to publish those changes to `/v1/models`.
 
 Models are discovered rather than hard-coded. Current official examples use `deepseek-flash` and `deepseek-v4-pro`; use the IDs returned by your deployment's `/v1/models`.
 
