@@ -76,7 +76,7 @@ curl http://localhost:8317/v1/chat/completions \
 
 ## 配置
 
-设置位于 `plugins.configs.cpa-deepseek`。全局插件开关和此插件开关均需启用。未知 provider 配置会报错；环境变量仅在 `credentials[].api-key` 展开。未设置的变量展开为空 key，会导致校验失败。
+设置位于 `plugins.configs.cpa-deepseek`。全局插件开关和此插件开关均需启用。未知 provider 配置会报错；环境变量仅在 `api-keys[].api-key` 展开。未设置的变量展开为空 key，会导致校验失败。
 
 ### 最小配置
 
@@ -87,17 +87,17 @@ plugins:
   configs:
     cpa-deepseek:
       enabled: true
-      credentials:
+      api-keys:
         - name: Personal
           api-key: "${DEEPSEEK_API_KEY}"
 ```
 
 ### 多凭证配置
 
-在插件配置内，将 `credentials` 数组替换为：
+在插件配置内，将 `api-keys` 数组替换为：
 
 ```yaml
-credentials:
+api-keys:
   - name: Personal
     api-key: "${DEEPSEEK_API_KEY}"
   - name: Team

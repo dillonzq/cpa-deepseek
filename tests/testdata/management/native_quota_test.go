@@ -94,7 +94,7 @@ func TestDeepSeekNativeQuotaAndCooldown(t *testing.T) {
 	}
 	var item config.PluginInstanceConfig
 	settings := fmt.Sprintf(`enabled: true
-credentials:
+api-keys:
   - name: A
     api-key: offline-a
   - name: B

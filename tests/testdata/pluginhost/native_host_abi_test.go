@@ -47,7 +47,7 @@ func TestDeepSeekNativeUnload(t *testing.T) {
 	}
 	client := newGuardedPluginClient(native)
 	defer client.Shutdown()
-	_, err = registerRPCPlugin(context.Background(), host, file.ID, client, pluginabi.MethodPluginRegister, []byte(fmt.Sprintf("credentials:\n  - api-key: offline-test-key\nbase-url: %s\nallow-http: true\nrequest-timeout: 30s\n", server.URL)))
+	_, err = registerRPCPlugin(context.Background(), host, file.ID, client, pluginabi.MethodPluginRegister, []byte(fmt.Sprintf("api-keys:\n  - api-key: offline-test-key\nbase-url: %s\nallow-http: true\nrequest-timeout: 30s\n", server.URL)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,7 +4,7 @@ plugins:
   configs:
     cpa-deepseek:
       enabled: true
-      credentials:
+      api-keys:
         - name: Personal
           api-key: "${DEEPSEEK_API_KEY}"
         - name: Team

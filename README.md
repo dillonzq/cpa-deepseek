@@ -76,7 +76,7 @@ Adjust the host and port for your CPA deployment. The DeepSeek key is used upstr
 
 ## Configuration
 
-Settings belong under `plugins.configs.cpa-deepseek`. Enable both the global plugin switch and this plugin's switch. Unknown provider settings are rejected; environment variables expand only in `credentials[].api-key`. An unset variable expands to an empty key and fails validation.
+Settings belong under `plugins.configs.cpa-deepseek`. Enable both the global plugin switch and this plugin's switch. Unknown provider settings are rejected; environment variables expand only in `api-keys[].api-key`. An unset variable expands to an empty key and fails validation.
 
 ### Minimal configuration
 
@@ -87,17 +87,17 @@ plugins:
   configs:
     cpa-deepseek:
       enabled: true
-      credentials:
+      api-keys:
         - name: Personal
           api-key: "${DEEPSEEK_API_KEY}"
 ```
 
 ### Multiple credentials
 
-Replace the `credentials` array inside the plugin configuration with:
+Replace the `api-keys` array inside the plugin configuration with:
 
 ```yaml
-credentials:
+api-keys:
   - name: Personal
     api-key: "${DEEPSEEK_API_KEY}"
   - name: Team

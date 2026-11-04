@@ -20,7 +20,7 @@ func (f catalogClient) Do(c context.Context, r pluginapi.HTTPRequest) (pluginapi
 const discovery = `{"data":[{"id":"deepseek-flash","name":"DeepSeek Flash","context_window":1048576,"max_output_tokens":393216,"input_modalities":["text","image"],"output_modalities":["text"],"effort":{"supported_levels":["low","high","max"],"default_level":"high"}}]}`
 
 func TestDiscoveryFallbackMetadataAndStale(t *testing.T) {
-	cfg, err := config.Load([]byte("credentials: [{api-key: rejected}, {api-key: working}]\n"))
+	cfg, err := config.Load([]byte("api-keys: [{api-key: rejected}, {api-key: working}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestDiscoveryFallbackMetadataAndStale(t *testing.T) {
 }
 
 func TestFailedRefreshPreservesOverridesAndRejectsMalformedCatalog(t *testing.T) {
-	cfg, err := config.Load([]byte("credentials: [{api-key: key}]\ncatalog: {stale-while-unavailable: false}\nmodels: [{name: manual, display-name: Custom}]\n"))
+	cfg, err := config.Load([]byte("api-keys: [{api-key: key}]\ncatalog: {stale-while-unavailable: false}\nmodels: [{name: manual, display-name: Custom}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestFailedRefreshPreservesOverridesAndRejectsMalformedCatalog(t *testing.T)
 }
 
 func TestPublicModelNamesRemainUnambiguous(t *testing.T) {
-	cfg, err := config.Load([]byte("credentials: [{api-key: key}]\nmodels: [{name: model}, {name: deepseek/model}]\n"))
+	cfg, err := config.Load([]byte("api-keys: [{api-key: key}]\nmodels: [{name: model}, {name: deepseek/model}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestPublicModelNamesRemainUnambiguous(t *testing.T) {
 }
 
 func TestExplicitThinkingOverrideWinsOverDiscovery(t *testing.T) {
-	cfg, err := config.Load([]byte("credentials: [{api-key: key}]\nmodels: [{name: deepseek-flash, thinking: {zero-allowed: false}}]\n"))
+	cfg, err := config.Load([]byte("api-keys: [{api-key: key}]\nmodels: [{name: deepseek-flash, thinking: {zero-allowed: false}}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

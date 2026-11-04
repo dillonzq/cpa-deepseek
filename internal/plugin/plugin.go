@@ -103,7 +103,7 @@ func (m *Manager) HandleCall(method string, data []byte) (response []byte, err e
 		}
 		return okEnvelope(resp), nil
 	case pluginabi.MethodAuthLoginStart, pluginabi.MethodAuthLoginPoll:
-		return ErrEnvelope("unsupported", "configure DeepSeek API keys under credentials"), nil
+		return ErrEnvelope("unsupported", "configure DeepSeek API keys under api-keys"), nil
 	case pluginabi.MethodQuotaDescribe:
 		return okEnvelope(pluginapi.QuotaDescribeResponse{SupportedProviders: []string{ProviderID}, DisplayName: "DeepSeek account balance", SupportsReset: false}), nil
 	case pluginabi.MethodQuotaFetch:
@@ -155,7 +155,7 @@ func registrationEnvelope() []byte {
 		GitHubRepository: "https://github.com/dillonzq/cpa-deepseek",
 		Logo:             "https://raw.githubusercontent.com/dillonzq/cpa-deepseek/main/assets/logo.png",
 		ConfigFields: []pluginapi.ConfigField{
-			{Name: "credentials", Type: pluginapi.ConfigFieldTypeArray, Description: "API keys: name and api-key. Environment variables expand in api-key only."},
+			{Name: "api-keys", Type: pluginapi.ConfigFieldTypeArray, Description: "API keys: name and api-key. Environment variables expand in api-key only."},
 			{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "DeepSeek API root (default https://api.deepseek.com)."},
 			{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model declarations and metadata overrides: name, display-name, max-context-length, max-tokens, input-modalities, output-modalities, thinking."},
 			{Name: "model-prefix", Type: pluginapi.ConfigFieldTypeObject, Description: "enabled (default true), value (default deepseek)."},
