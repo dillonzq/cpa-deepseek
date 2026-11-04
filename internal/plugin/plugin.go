@@ -18,6 +18,7 @@ import (
 
 const ProviderID = "deepseek"
 const pluginName = "cpa-deepseek"
+const pluginDisplayName = "DeepSeek"
 
 var pluginVersion = "0.0.0-dev"
 
@@ -151,7 +152,7 @@ func registrationEnvelope() []byte {
 		SchemaVersion uint32             `json:"schema_version"`
 		Metadata      pluginapi.Metadata `json:"metadata"`
 		Capabilities  capabilities       `json:"capabilities"`
-	}{pluginabi.SchemaVersion, pluginapi.Metadata{Name: pluginName, Version: pluginVersion, Author: "dillonzq",
+	}{pluginabi.SchemaVersion, pluginapi.Metadata{Name: pluginDisplayName, Version: pluginVersion, Author: "dillonzq",
 		GitHubRepository: "https://github.com/dillonzq/cpa-deepseek",
 		Logo:             "https://raw.githubusercontent.com/dillonzq/cpa-deepseek/main/assets/logo.png",
 		ConfigFields: []pluginapi.ConfigField{
