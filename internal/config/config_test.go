@@ -8,7 +8,7 @@ import (
 
 func TestNewConfiguration(t *testing.T) {
 	t.Setenv("DEEPSEEK_TEST_KEY", "secret-value")
-	c, err := Load([]byte("enabled: true\npriority: 10\nstore: {}\napi-keys:\n  - name: Personal\n    api-key: ${DEEPSEEK_TEST_KEY}\n"))
+	c, err := Load([]byte("enabled: true\npriority: 10\nstore: {}\napi-keys:\n  - name: Personal\n    value: ${DEEPSEEK_TEST_KEY}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,17 +21,19 @@ func TestNewConfiguration(t *testing.T) {
 }
 
 func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
-	base := "api-keys:\n  - api-key: sensitive-secret-123\n"
+	base := "api-keys:\n  - value: sensitive-secret-123\n"
 	for _, tc := range []string{
-		"api-keys: [sensitive-secret-123]", "api-key: sensitive-secret-123", "api-keys: []", base + "unknown: sensitive-secret-123\n",
+		"api-keys: [sensitive-secret-123]", "api-key: sensitive-secret-123",
+		"api-keys: [{api-key: sensitive-secret-123}]",
+		"api-keys: [{value: valid-key, api-key: sensitive-secret-123}]", "api-keys: []", base + "unknown: sensitive-secret-123\n",
 		base + "---\napi-keys: []", base + "base-url: https://user:sensitive-secret-123@example.test\n",
 		base + "base-url: http://example.test\n", base + "base-url: https://example.test?key=sensitive-secret-123\n",
 		base + "base-url: file:///tmp/key\n", base + "quota: {timeout: 0s}\n", base + "quota: {timeout: 2m}\n",
 		base + "request-timeout: -1s\n", base + "catalog: {refresh-interval: 1s}\n", base + "max-response-bytes: 0\n",
 		base + "model-prefix: {value: ../invalid}\n", base + "models: [{name: bad(id)}]\n",
-		"api-keys:\n  - api-key: sensitive-secret-123\n  - api-key: sensitive-secret-123\n",
-		"api-keys:\n  - api-key: ${DEEPSEEK_MISSING_TEST_ENV}\n",
-		"api-keys:\n  - api-key: 'sensitive-secret-123 space'\n",
+		"api-keys:\n  - value: sensitive-secret-123\n  - value: sensitive-secret-123\n",
+		"api-keys:\n  - value: ${DEEPSEEK_MISSING_TEST_ENV}\n",
+		"api-keys:\n  - value: 'sensitive-secret-123 space'\n",
 	} {
 		t.Run(tc, func(t *testing.T) {
 			_, err := Load([]byte(tc))
@@ -46,7 +48,7 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 }
 
 func TestMetadataOverridesAndBasePath(t *testing.T) {
-	c, err := Load([]byte("api-keys: [{api-key: key}]\nbase-url: http://localhost:8080/proxy/\nallow-http: true\nmodel-prefix: {enabled: false}\nmodels:\n  - name: deepseek-flash\n    max-context-length: 1048576\n    max-tokens: 393216\n    input-modalities: [text, image]\n    thinking: {zero-allowed: true, levels: [low, high, max]}\n"))
+	c, err := Load([]byte("api-keys: [{value: key}]\nbase-url: http://localhost:8080/proxy/\nallow-http: true\nmodel-prefix: {enabled: false}\nmodels:\n  - name: deepseek-flash\n    max-context-length: 1048576\n    max-tokens: 393216\n    input-modalities: [text, image]\n    thinking: {zero-allowed: true, levels: [low, high, max]}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

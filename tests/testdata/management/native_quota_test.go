@@ -96,9 +96,9 @@ func TestDeepSeekNativeQuotaAndCooldown(t *testing.T) {
 	settings := fmt.Sprintf(`enabled: true
 api-keys:
   - name: A
-    api-key: offline-a
+    value: offline-a
   - name: B
-    api-key: offline-b
+    value: offline-b
 base-url: %s
 allow-http: true
 `, upstream.URL)

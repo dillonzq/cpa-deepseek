@@ -14,7 +14,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-const fixtureConfig = "api-keys:\n  - name: A\n    api-key: key-a\n  - name: B\n    api-key: key-b\n"
+const fixtureConfig = "api-keys:\n  - name: A\n    value: key-a\n  - name: B\n    value: key-b\n"
 const fixtureCatalog = `{"data":[{"id":"deepseek-flash","context_window":1048576,"max_output_tokens":393216,"input_modalities":["text","image"],"effort":{"supported_levels":["low","high","max"]}}]}`
 const fixtureBalance = `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00000001","granted_balance":"10.00000001","topped_up_balance":"100.00"}]}`
 
@@ -149,7 +149,7 @@ func TestCredentialIdentityReloadAndRemoval(t *testing.T) {
 	if err != nil || !parsed.Handled || parsed.Auth.ID != credentialID("key-a") || parsed.Auth.Label != "A" || parsed.Auth.Metadata["api_key"] != nil || !parsed.Auth.Disabled {
 		t.Fatalf("auth parse: %+v %v", parsed, err)
 	}
-	settings := "api-keys:\n  - name: Renamed B\n    api-key: key-b\n  - name: Renamed A\n    api-key: key-a\n"
+	settings := "api-keys:\n  - name: Renamed B\n    value: key-b\n  - name: Renamed A\n    value: key-a\n"
 	raw, _ := m.HandleCall(pluginabi.MethodPluginReconfigure, mustJSON(lifecycleRequest{ConfigYAML: []byte(settings)}))
 	if !decodeEnv(t, raw).OK || len(f.callsOf(pluginabi.MethodHostAuthSave)) != 2 {
 		t.Fatal("reload overwrote persisted auths")
@@ -158,7 +158,7 @@ func TestCredentialIdentityReloadAndRemoval(t *testing.T) {
 	if newParsed.Auth.ID != parsed.Auth.ID || newParsed.Auth.Label != "Renamed A" || newParsed.Auth.ProxyURL != parsed.Auth.ProxyURL {
 		t.Fatal("rename/reorder changed identity or host fields")
 	}
-	raw, _ = m.HandleCall(pluginabi.MethodPluginReconfigure, mustJSON(lifecycleRequest{ConfigYAML: []byte("api-keys: [{name: B, api-key: key-b}]\n")}))
+	raw, _ = m.HandleCall(pluginabi.MethodPluginReconfigure, mustJSON(lifecycleRequest{ConfigYAML: []byte("api-keys: [{name: B, value: key-b}]\n")}))
 	if !decodeEnv(t, raw).OK {
 		t.Fatal("removal reload failed")
 	}

@@ -76,7 +76,7 @@ Adjust the host and port for your CPA deployment. The DeepSeek key is used upstr
 
 ## Configuration
 
-Settings belong under `plugins.configs.cpa-deepseek`. Enable both the global plugin switch and this plugin's switch. Unknown provider settings are rejected; environment variables expand only in `api-keys[].api-key`. An unset variable expands to an empty key and fails validation.
+Settings belong under `plugins.configs.cpa-deepseek`. Enable both the global plugin switch and this plugin's switch. Unknown provider settings are rejected; environment variables expand only in `api-keys[].value`. An unset variable expands to an empty key and fails validation.
 
 ### Minimal configuration
 
@@ -89,7 +89,7 @@ plugins:
       enabled: true
       api-keys:
         - name: Personal
-          api-key: "${DEEPSEEK_API_KEY}"
+          value: "${DEEPSEEK_API_KEY}"
 ```
 
 ### Multiple credentials
@@ -99,12 +99,12 @@ Replace the `api-keys` array inside the plugin configuration with:
 ```yaml
 api-keys:
   - name: Personal
-    api-key: "${DEEPSEEK_API_KEY}"
+    value: "${DEEPSEEK_API_KEY}"
   - name: Team
-    api-key: "${DEEPSEEK_TEAM_API_KEY}"
+    value: "${DEEPSEEK_TEAM_API_KEY}"
 ```
 
-Each entry accepts `name` and `api-key`. At least one non-empty key is required, and duplicate keys are rejected. Different keys for the **same DeepSeek account share its balance and concurrency limits**; a larger key pool does not increase that account's quota.
+Each entry accepts `name` and `value`. At least one non-empty key is required, and duplicate keys are rejected. Different keys for the **same DeepSeek account share its balance and concurrency limits**; a larger key pool does not increase that account's quota.
 
 ### Configuration options
 

@@ -27,7 +27,7 @@ const (
 
 type Credential struct {
 	Name  string `yaml:"name"`
-	Value string `yaml:"api-key"`
+	Value string `yaml:"value"`
 }
 
 type Model struct {
@@ -129,7 +129,7 @@ func Load(data []byte) (Config, error) {
 		k.Value = strings.TrimSpace(os.ExpandEnv(k.Value))
 		k.Name = strings.TrimSpace(k.Name)
 		if k.Value == "" || len(k.Value) > 4096 || strings.IndexFunc(k.Value, unicode.IsSpace) >= 0 || strings.IndexFunc(k.Value, unicode.IsControl) >= 0 {
-			return Config{}, fmt.Errorf("api-keys[%d].api-key is empty or invalid", i)
+			return Config{}, fmt.Errorf("api-keys[%d].value is empty or invalid", i)
 		}
 		if len(k.Name) > 256 || strings.IndexFunc(k.Name, unicode.IsControl) >= 0 {
 			return Config{}, fmt.Errorf("api-keys[%d].name is invalid", i)

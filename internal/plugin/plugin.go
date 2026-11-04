@@ -155,7 +155,7 @@ func registrationEnvelope() []byte {
 		GitHubRepository: "https://github.com/dillonzq/cpa-deepseek",
 		Logo:             "https://raw.githubusercontent.com/dillonzq/cpa-deepseek/main/assets/logo.png",
 		ConfigFields: []pluginapi.ConfigField{
-			{Name: "api-keys", Type: pluginapi.ConfigFieldTypeArray, Description: "API keys: name and api-key. Environment variables expand in api-key only."},
+			{Name: "api-keys", Type: pluginapi.ConfigFieldTypeArray, Description: "API keys: name and value. Environment variables expand in value only."},
 			{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "DeepSeek API root (default https://api.deepseek.com)."},
 			{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model declarations and metadata overrides: name, display-name, max-context-length, max-tokens, input-modalities, output-modalities, thinking."},
 			{Name: "model-prefix", Type: pluginapi.ConfigFieldTypeObject, Description: "enabled (default true), value (default deepseek)."},

@@ -76,7 +76,7 @@ curl http://localhost:8317/v1/chat/completions \
 
 ## 配置
 
-设置位于 `plugins.configs.cpa-deepseek`。全局插件开关和此插件开关均需启用。未知 provider 配置会报错；环境变量仅在 `api-keys[].api-key` 展开。未设置的变量展开为空 key，会导致校验失败。
+设置位于 `plugins.configs.cpa-deepseek`。全局插件开关和此插件开关均需启用。未知 provider 配置会报错；环境变量仅在 `api-keys[].value` 展开。未设置的变量展开为空 key，会导致校验失败。
 
 ### 最小配置
 
@@ -89,7 +89,7 @@ plugins:
       enabled: true
       api-keys:
         - name: Personal
-          api-key: "${DEEPSEEK_API_KEY}"
+          value: "${DEEPSEEK_API_KEY}"
 ```
 
 ### 多凭证配置
@@ -99,12 +99,12 @@ plugins:
 ```yaml
 api-keys:
   - name: Personal
-    api-key: "${DEEPSEEK_API_KEY}"
+    value: "${DEEPSEEK_API_KEY}"
   - name: Team
-    api-key: "${DEEPSEEK_TEAM_API_KEY}"
+    value: "${DEEPSEEK_TEAM_API_KEY}"
 ```
 
-每项支持 `name` 和 `api-key`，至少需要一个非空 key，重复 key 会被拒绝。**同一 DeepSeek 账户下的不同 key 共享账户余额和并发限制**；增加 key 数量不会增加该账户额度。
+每项支持 `name` 和 `value`，至少需要一个非空 key，重复 key 会被拒绝。**同一 DeepSeek 账户下的不同 key 共享账户余额和并发限制**；增加 key 数量不会增加该账户额度。
 
 ### 配置选项
 
