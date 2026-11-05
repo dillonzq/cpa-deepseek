@@ -140,3 +140,54 @@ func TestDiscoveryErrorsAreUsefulAndRedacted(t *testing.T) {
 		})
 	}
 }
+
+func TestModelAliasPublishesAliasAndSendsUpstreamName(t *testing.T) {
+	for _, c := range []struct {
+		prefix string
+		want   string
+	}{{"", "deepseek/flash"}, {"model-prefix: {enabled: false}\n", "flash"}} {
+		cfg, err := config.Load([]byte("api-keys: [{value: key}]\n" + c.prefix + "models: [{name: deepseek-flash, alias: flash}]\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := New(cfg, catalogClient(func(context.Context, pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+			return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(discovery)}, nil
+		}))
+		if err := m.Refresh(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if models := m.Models(); len(models) != 1 || models[0].PublicID != c.want || models[0].UpstreamID != "deepseek-flash" || models[0].ContextLimit != 1048576 {
+			t.Fatalf("models = %+v", models)
+		}
+		for _, id := range []string{c.want, "deepseek-flash"} {
+			if r, ok := m.Lookup(id); !ok || r.UpstreamID != "deepseek-flash" {
+				t.Errorf("Lookup(%q) = %+v, %v", id, r, ok)
+			}
+		}
+		if _, ok := m.Lookup("deepseek/deepseek-flash"); ok && c.prefix == "" {
+			t.Error("original public ID still routes after aliasing")
+		}
+		if len(m.Conflicts()) != 0 {
+			t.Fatalf("conflicts = %v", m.Conflicts())
+		}
+	}
+}
+
+func TestModelAliasCollidingWithModelIDIsExcluded(t *testing.T) {
+	cfg, err := config.Load([]byte("api-keys: [{value: key}]\nmodels: [{name: manual, alias: deepseek-flash}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(cfg, catalogClient(func(context.Context, pluginapi.HTTPRequest) (pluginapi.HTTPResponse, error) {
+		return pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(discovery)}, nil
+	}))
+	if err := m.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if models := m.Models(); len(models) != 1 || models[0].UpstreamID != "deepseek-flash" {
+		t.Fatalf("models = %+v", models)
+	}
+	if c := m.Conflicts(); len(c) != 1 || !strings.Contains(c[0], "manual") {
+		t.Fatalf("conflicts = %v", c)
+	}
+}

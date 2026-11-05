@@ -20,10 +20,11 @@ plugins:
         timeout: 15s
       request-timeout: 15m
       max-response-bytes: 67108864
-      # Optional: add models or override metadata returned by /models.
-      # 可选：补充模型或覆盖 /models 返回的元数据。
+      # Optional: add models, publish aliases, or override metadata returned by /models.
+      # 可选：补充模型、发布别名或覆盖 /models 返回的元数据。
       # models:
       #   - name: deepseek-flash
+      #     alias: flash # published as deepseek/flash; requests still send deepseek-flash
       #     display-name: DeepSeek Flash
       #     max-context-length: 1048576
       #     max-tokens: 393216

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -161,7 +162,7 @@ func registrationEnvelope() []byte {
 		ConfigFields: []pluginapi.ConfigField{
 			{Name: "api-keys", Type: pluginapi.ConfigFieldTypeArray, Description: "API keys: name and value. Environment variables expand in value only."},
 			{Name: "base-url", Type: pluginapi.ConfigFieldTypeString, Description: "DeepSeek API root (default https://api.deepseek.com)."},
-			{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model declarations and metadata overrides: name, display-name, max-context-length, max-tokens, input-modalities, output-modalities, thinking."},
+			{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Model declarations and metadata overrides: name, alias (published model name; the prefix still applies), display-name, max-context-length, max-tokens, input-modalities, output-modalities, thinking."},
 			{Name: "model-prefix", Type: pluginapi.ConfigFieldTypeObject, Description: "enabled (default true), value (default deepseek)."},
 			{Name: "catalog", Type: pluginapi.ConfigFieldTypeObject, Description: "refresh-interval (15m), stale-while-unavailable (true)."},
 			{Name: "quota", Type: pluginapi.ConfigFieldTypeObject, Description: "timeout (15s, maximum 1m). Fetches fresh balance for the selected credential."},
@@ -204,6 +205,7 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 			_ = m.bridge.Log("warn", "DeepSeek model discovery failed; serving configured or last known models", map[string]any{"reason": err.Error()})
 		}
 	}
+	m.logAliasConflicts(nil, catalogue)
 	// Discovery may exhaust its deadline while configured or cached models
 	// remain usable. Give credential initialization its own bounded context.
 	ctx, cancel := context.WithTimeout(m.workContext(), 10*time.Second)
@@ -348,13 +350,23 @@ func (m *Manager) startRefreshLoop(cfg config.Config, catalogue *catalog.Manager
 // refreshCatalog updates the local snapshot. The SDK has no callback to
 // invalidate the host registry, so changes require a plugin reload.
 func (m *Manager) refreshCatalog(ctx context.Context, catalogue *catalog.Manager) {
-	previous := catalogue.Models()
+	previous, previousConflicts := catalogue.Models(), catalogue.Conflicts()
 	if err := catalogue.Refresh(ctx); err != nil && m.bridge != nil {
 		_ = m.bridge.Log("warn", "DeepSeek model discovery failed", map[string]any{"reason": err.Error()})
 	}
+	m.logAliasConflicts(previousConflicts, catalogue)
 	if m.bridge != nil && !reflect.DeepEqual(previous, catalogue.Models()) {
 		_ = m.bridge.Log("warn", "DeepSeek model catalog changed; reload the plugin to update the host model list", nil)
 	}
+}
+
+// logAliasConflicts reports excluded aliased models when the set changes.
+func (m *Manager) logAliasConflicts(previous []string, catalogue *catalog.Manager) {
+	conflicts := catalogue.Conflicts()
+	if m.bridge == nil || len(conflicts) == 0 || slices.Equal(previous, conflicts) {
+		return
+	}
+	_ = m.bridge.Log("warn", "DeepSeek model aliases excluded", map[string]any{"reason": strings.Join(conflicts, "; ")})
 }
 
 func okEnvelope(result any) []byte {

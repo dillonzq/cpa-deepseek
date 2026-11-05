@@ -117,7 +117,7 @@ The [complete example](config.example.yaml) includes the default settings.
 | `model-prefix.value` | `deepseek` | For example, `deepseek/deepseek-flash` |
 | `catalog.refresh-interval` | `15m` | Discovery interval, at least `1m` |
 | `catalog.stale-while-unavailable` | `true` | Retain the last successful discovery snapshot during outages |
-| `models` | empty | Model declarations and metadata overrides |
+| `models` | empty | Model declarations, aliases and metadata overrides |
 | `quota.timeout` | `15s` | Balance lookup or credential validation timeout, at most `1m` |
 | `request-timeout` | `15m` | Total upstream request timeout, including streams |
 | `max-response-bytes` | `67108864` | Accepted non-streaming response size or cumulative stream size: 64 MiB |
@@ -143,6 +143,14 @@ models:
 ```
 
 Explicit fields override discovered metadata. A declaration can also add a model missing from discovery, and remains available during a discovery outage. Metadata describes capabilities; declaring a model or modality does not enable unsupported upstream features. Keep overrides aligned with the [official model information](https://api-docs.deepseek.com/api/list-models/).
+
+`alias` follows CPA's `name`/`alias` convention: it replaces the upstream `name` in the published model ID. The prefix still applies, and requests still send `name` upstream. Aliases must be unique. An aliased model whose public ID matches another model's ID is excluded, and the plugin logs a warning. For example, to publish `deepseek-flash` as `deepseek/flash`:
+
+```yaml
+models:
+  - name: deepseek-flash
+    alias: flash
+```
 
 ## Models and protocols
 

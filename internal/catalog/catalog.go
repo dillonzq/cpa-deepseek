@@ -2,6 +2,7 @@
 package catalog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -77,6 +78,7 @@ type Manager struct {
 	raw       []rawModel
 	models    []ModelRecord
 	index     map[string]ModelRecord
+	conflicts []string
 }
 
 func New(cfg config.Config, client HostClient) *Manager {
@@ -177,7 +179,7 @@ func (m *Manager) swap(raw []rawModel) {
 		if r.Effort != nil {
 			metadata.Thinking = &modelmeta.Thinking{Levels: r.Effort.Levels, ZeroAllowed: modelmeta.Ptr(true)}
 		}
-		models[r.ID] = record(m.cfg, r.ID, metadata, false)
+		models[r.ID] = record(m.cfg, r.ID, "", metadata, false)
 	}
 	for _, declaration := range m.cfg.Models {
 		r := models[declaration.Name]
@@ -189,13 +191,27 @@ func (m *Manager) swap(raw []rawModel) {
 				low.Thinking = &modelmeta.Thinking{Levels: r.Thinking.Levels, ZeroAllowed: &r.Thinking.ZeroAllowed}
 			}
 		}
-		models[declaration.Name] = record(m.cfg, declaration.Name, modelmeta.Merge(low, declaration.Metadata), true)
+		models[declaration.Name] = record(m.cfg, declaration.Name, declaration.Alias, modelmeta.Merge(low, declaration.Metadata), true)
+	}
+	// Config validation keeps aliases unique, so a duplicate public ID pairs
+	// an aliased model with an unaliased one; the unaliased model keeps it.
+	owners := map[string]bool{}
+	for _, r := range models {
+		if r.PublicID == config.PublicID(m.cfg, r.UpstreamID) {
+			owners[r.PublicID] = true
+		}
 	}
 	list := make([]ModelRecord, 0, len(models))
 	index := make(map[string]ModelRecord, len(models)*2)
+	conflicts := []string{}
 	for _, r := range models {
+		if r.PublicID != config.PublicID(m.cfg, r.UpstreamID) && owners[r.PublicID] {
+			conflicts = append(conflicts, fmt.Sprintf("model %s: alias %s collides with an existing model ID", r.UpstreamID, r.PublicID))
+			continue
+		}
 		list = append(list, r)
 	}
+	slices.Sort(conflicts)
 	slices.SortFunc(list, func(a, b ModelRecord) int { return strings.Compare(a.PublicID, b.PublicID) })
 	for _, r := range list {
 		index[r.UpstreamID] = r
@@ -205,11 +221,11 @@ func (m *Manager) swap(raw []rawModel) {
 		index[r.PublicID] = r
 	}
 	m.mu.Lock()
-	m.raw, m.models, m.index = slices.Clone(raw), list, index
+	m.raw, m.models, m.index, m.conflicts = slices.Clone(raw), list, index, conflicts
 	m.mu.Unlock()
 }
 
-func record(cfg config.Config, id string, meta modelmeta.Metadata, custom bool) ModelRecord {
+func record(cfg config.Config, id, alias string, meta modelmeta.Metadata, custom bool) ModelRecord {
 	thinking := meta.Thinking.Support()
 	if thinking != nil && !thinking.ZeroAllowed {
 		copy := *thinking
@@ -225,7 +241,7 @@ func record(cfg config.Config, id string, meta modelmeta.Metadata, custom bool) 
 	if name == "" {
 		name = id
 	}
-	return ModelRecord{PublicID: config.PublicID(cfg, id), UpstreamID: id, DisplayName: name,
+	return ModelRecord{PublicID: config.PublicID(cfg, cmp.Or(alias, id)), UpstreamID: id, DisplayName: name,
 		Description: modelmeta.Value(meta.Description), ContextLimit: modelmeta.Value(meta.Context),
 		OutputLimit: modelmeta.Value(meta.Output), InputModes: meta.InputModalities, OutputModes: meta.OutputModalities,
 		Thinking: thinking, UserDefined: custom}
@@ -236,6 +252,14 @@ func (m *Manager) Models() []ModelRecord {
 	defer m.mu.RUnlock()
 	return slices.Clone(m.models)
 }
+
+// Conflicts lists aliased models excluded because their public ID is taken.
+func (m *Manager) Conflicts() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return slices.Clone(m.conflicts)
+}
+
 func (m *Manager) Lookup(id string) (ModelRecord, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

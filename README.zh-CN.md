@@ -117,7 +117,7 @@ api-keys:
 | `model-prefix.value` | `deepseek` | 如 `deepseek/deepseek-flash` |
 | `catalog.refresh-interval` | `15m` | 模型发现周期，至少 `1m` |
 | `catalog.stale-while-unavailable` | `true` | 发现失败时保留最近成功的快照 |
-| `models` | 空 | 模型声明及元数据覆盖 |
+| `models` | 空 | 模型声明、别名及元数据覆盖 |
 | `quota.timeout` | `15s` | 余额查询或凭证验证超时，最多 `1m` |
 | `request-timeout` | `15m` | 上游请求总超时，包含流式读取 |
 | `max-response-bytes` | `67108864` | 接受的普通响应大小或流累计大小，64 MiB |
@@ -143,6 +143,14 @@ models:
 ```
 
 显式字段优先于接口返回的元数据。声明也可以补充发现结果中缺少的模型，并在发现接口不可用时继续生效。元数据仅描述能力，声明某个模型或模态不会启用上游不支持的功能；请与[官方模型信息](https://api-docs.deepseek.com/zh-cn/api/list-models/)保持一致。
+
+`alias` 沿用 CPA 的 `name`/`alias` 约定，用别名替换对外发布 ID 中的上游 `name`；前缀仍会叠加，请求上游时仍发送 `name`。别名必须唯一；若加别名后的对外 ID 与其他模型的 ID 相同，该模型会被排除，插件记录警告日志。例如把 `deepseek-flash` 发布为 `deepseek/flash`：
+
+```yaml
+models:
+  - name: deepseek-flash
+    alias: flash
+```
 
 ## 模型与协议
 

@@ -31,6 +31,7 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 		base + "base-url: file:///tmp/key\n", base + "quota: {timeout: 0s}\n", base + "quota: {timeout: 2m}\n",
 		base + "request-timeout: -1s\n", base + "catalog: {refresh-interval: 1s}\n", base + "max-response-bytes: 0\n",
 		base + "model-prefix: {value: ../invalid}\n", base + "models: [{name: bad(id)}]\n",
+		base + "models: [{name: a, alias: x}, {name: b, alias: x}]\n", base + "models: [{name: a, alias: ' x'}]\n",
 		"api-keys:\n  - value: sensitive-secret-123\n  - value: sensitive-secret-123\n",
 		"api-keys:\n  - value: ${DEEPSEEK_MISSING_TEST_ENV}\n",
 		"api-keys:\n  - value: 'sensitive-secret-123 space'\n",
@@ -54,5 +55,15 @@ func TestMetadataOverridesAndBasePath(t *testing.T) {
 	}
 	if c.BaseURL != "http://localhost:8080/proxy" || PublicID(c, "deepseek-flash") != "deepseek-flash" || *c.Models[0].Context != 1048576 {
 		t.Fatal("overrides were not retained")
+	}
+}
+
+func TestModelAlias(t *testing.T) {
+	c, err := Load([]byte("api-keys: [{value: key}]\nmodels: [{name: deepseek-flash, alias: flash}, {name: deepseek-v4-pro}]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models[0].Alias != "flash" || c.Models[1].Alias != "" {
+		t.Fatalf("aliases = %q, %q", c.Models[0].Alias, c.Models[1].Alias)
 	}
 }

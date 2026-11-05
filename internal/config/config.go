@@ -31,7 +31,11 @@ type Credential struct {
 }
 
 type Model struct {
-	Name               string `yaml:"name"`
+	Name string `yaml:"name"`
+	// Alias replaces Name in the published model ID, following CPA's
+	// name/alias convention. The model prefix still applies, and requests
+	// still send Name upstream.
+	Alias              string `yaml:"alias"`
 	modelmeta.Metadata `yaml:",inline"`
 }
 
@@ -139,12 +143,18 @@ func Load(data []byte) (Config, error) {
 		}
 		seen[k.Value] = true
 	}
-	models := map[string]bool{}
+	models, aliases := map[string]bool{}, map[string]bool{}
 	for i, m := range c.Models {
 		if !modelID.MatchString(m.Name) || models[m.Name] {
 			return Config{}, fmt.Errorf("models[%d].name is invalid or duplicated", i)
 		}
 		models[m.Name] = true
+		if m.Alias != "" {
+			if !modelID.MatchString(m.Alias) || aliases[m.Alias] {
+				return Config{}, fmt.Errorf("models[%d].alias is invalid or duplicated", i)
+			}
+			aliases[m.Alias] = true
+		}
 		if m.Context != nil && *m.Context < 0 || m.Output != nil && *m.Output < 0 {
 			return Config{}, fmt.Errorf("models[%d] token limits must be non-negative", i)
 		}
