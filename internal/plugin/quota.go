@@ -43,7 +43,7 @@ func (m *Manager) FetchQuota(ctx context.Context, req pluginapi.QuotaFetchReques
 	cfg := m.cfg
 	m.mu.RUnlock()
 	key := strings.TrimSpace(req.Attributes["api_key"])
-	if req.Provider != ProviderID || !cfg.HasCredential(key) {
+	if req.Provider != ProviderID || !cfg.HasAPIKey(key) {
 		return pluginapi.QuotaFetchResponse{}, authFailure()
 	}
 	balance, err := m.fetchBalance(ctx, cfg, key)

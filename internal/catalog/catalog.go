@@ -106,7 +106,7 @@ func (m *Manager) Refresh(ctx context.Context) error {
 	if m.client == nil {
 		failures = append(failures, "transport unavailable")
 	} else {
-		for i, key := range m.cfg.Credentials {
+		for i, key := range m.cfg.APIKeys {
 			attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
 			resp, err := m.client.Do(attempt, pluginapi.HTTPRequest{Method: http.MethodGet,
 				URL:     JoinUpstreamURL(m.cfg.BaseURL, "/models"),
