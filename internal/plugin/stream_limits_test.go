@@ -58,9 +58,16 @@ func tickingUpstream(interval time.Duration, chunks int) func(string, []byte) ([
 	})
 }
 
+// limitedStream is the outcome of one stream run under configured limits.
+type limitedStream struct {
+	env      pluginabi.Envelope
+	closeErr string // downstream close error; empty for a clean close
+	output   string // everything emitted downstream
+}
+
 // runLimitedStream registers with extraYAML, runs one stream to completion,
-// and returns the initial envelope and the downstream close error.
-func runLimitedStream(t *testing.T, extraYAML string, responder func(string, []byte) ([]byte, error)) (pluginabi.Envelope, string) {
+// and returns its outcome.
+func runLimitedStream(t *testing.T, extraYAML string, responder func(string, []byte) ([]byte, error)) limitedStream {
 	t.Helper()
 	f := &fakeCaller{responder: responder}
 	m := NewManager(NewHostBridge(f.call))
@@ -81,33 +88,62 @@ func runLimitedStream(t *testing.T, extraYAML string, responder func(string, []b
 		if len(downCloses) != 0 {
 			t.Fatalf("failed open must not close a downstream stream: %v", downCloses)
 		}
-		return env, ""
+		return limitedStream{env: env}
 	}
 	if len(downCloses) != 1 {
 		t.Fatalf("downstream closes = %d, want 1", len(downCloses))
 	}
 	var closeReq struct{ Error string }
 	_ = json.Unmarshal(downCloses[0].payload, &closeReq)
-	return env, closeReq.Error
+	var output strings.Builder
+	for _, c := range f.callsOf(pluginabi.MethodHostStreamEmit) {
+		var emit struct{ Payload []byte }
+		_ = json.Unmarshal(c.payload, &emit)
+		output.Write(emit.Payload)
+	}
+	return limitedStream{env: env, closeErr: closeReq.Error, output: output.String()}
+}
+
+// requireCompleteStream asserts that the stream opened, delivered all
+// chunks content chunks and the terminal frame, and closed cleanly.
+func requireCompleteStream(t *testing.T, got limitedStream, chunks int) {
+	t.Helper()
+	if !got.env.OK {
+		t.Fatalf("stream did not open: %+v", got.env.Error)
+	}
+	if got.closeErr != "" {
+		t.Fatalf("stream closed with error: %s", got.closeErr)
+	}
+	if n := strings.Count(got.output, `"content":"x"`); n != chunks {
+		t.Fatalf("delivered %d content chunks, want %d", n, chunks)
+	}
+	if !strings.Contains(got.output, `"finish_reason":"stop"`) {
+		t.Fatalf("terminal frame not delivered: %s", got.output)
+	}
+}
+
+// requireLimitClose asserts that the stream opened and was ended by limit.
+func requireLimitClose(t *testing.T, got limitedStream, limit error) {
+	t.Helper()
+	if !got.env.OK {
+		t.Fatalf("stream did not open: %+v", got.env.Error)
+	}
+	if got.closeErr != limit.Error() {
+		t.Fatalf("close error = %q, want %q", got.closeErr, limit)
+	}
 }
 
 func TestExecuteStreamActiveStreamOutlivesRequestTimeout(t *testing.T) {
 	// The stream lasts several times request-timeout but never goes quiet
 	// for stream-idle-timeout, so it must complete normally.
-	_, closeErr := runLimitedStream(t,
+	requireCompleteStream(t, runLimitedStream(t,
 		"request-timeout: 30ms\nstream-idle-timeout: 1s\nmax-stream-duration: 10s\n",
-		tickingUpstream(10*time.Millisecond, 15))
-	if closeErr != "" {
-		t.Fatalf("active stream closed with error: %s", closeErr)
-	}
+		tickingUpstream(10*time.Millisecond, 15)), 15)
 }
 
 func TestExecuteStreamIdleTimeoutRestartsOnEachChunk(t *testing.T) {
 	// Chunks arrive every 20ms against a 60ms idle limit for ~200ms total.
-	_, closeErr := runLimitedStream(t, "stream-idle-timeout: 60ms\n", tickingUpstream(20*time.Millisecond, 10))
-	if closeErr != "" {
-		t.Fatalf("stream with regular chunks closed with error: %s", closeErr)
-	}
+	requireCompleteStream(t, runLimitedStream(t, "stream-idle-timeout: 60ms\n", tickingUpstream(20*time.Millisecond, 10)), 10)
 }
 
 func TestExecuteStreamIdleTimeoutClosesSilentUpstream(t *testing.T) {
@@ -115,7 +151,7 @@ func TestExecuteStreamIdleTimeoutClosesSilentUpstream(t *testing.T) {
 	// must close it, unblocking the read, and report the limit downstream.
 	release := make(chan struct{})
 	var once atomic.Bool
-	_, closeErr := runLimitedStream(t, "stream-idle-timeout: 50ms\n", withCatalog(func(method string, _ []byte) ([]byte, error) {
+	got := runLimitedStream(t, "stream-idle-timeout: 50ms\n", withCatalog(func(method string, _ []byte) ([]byte, error) {
 		switch method {
 		case pluginabi.MethodHostHTTPDoStream:
 			return hostOK(hostStreamStartResp{StatusCode: http.StatusOK, StreamID: "up-idle"}), nil
@@ -129,19 +165,14 @@ func TestExecuteStreamIdleTimeoutClosesSilentUpstream(t *testing.T) {
 		}
 		return hostOK(struct{}{}), nil
 	}))
-	if closeErr != "stream exceeded stream-idle-timeout" {
-		t.Fatalf("close error = %q, want idle timeout", closeErr)
-	}
+	requireLimitClose(t, got, errStreamIdleTimeout)
 }
 
 func TestExecuteStreamMaxDurationEndsActiveStream(t *testing.T) {
 	start := time.Now()
-	_, closeErr := runLimitedStream(t,
+	requireLimitClose(t, runLimitedStream(t,
 		"stream-idle-timeout: 1s\nmax-stream-duration: 80ms\n",
-		tickingUpstream(10*time.Millisecond, -1))
-	if closeErr != "stream exceeded max-stream-duration" {
-		t.Fatalf("close error = %q, want max-stream-duration", closeErr)
-	}
+		tickingUpstream(10*time.Millisecond, -1)), errMaxStreamDuration)
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("max-stream-duration enforced after %v", elapsed)
 	}
@@ -151,13 +182,13 @@ func TestExecuteStreamOpenTimeout(t *testing.T) {
 	saved := streamTimeoutGrace
 	streamTimeoutGrace = 0
 	t.Cleanup(func() { streamTimeoutGrace = saved })
-	env, _ := runLimitedStream(t, "request-timeout: 30ms\nstream-idle-timeout: 10s\n", withCatalog(func(method string, _ []byte) ([]byte, error) {
+	env := runLimitedStream(t, "request-timeout: 30ms\nstream-idle-timeout: 10s\n", withCatalog(func(method string, _ []byte) ([]byte, error) {
 		if method == pluginabi.MethodHostHTTPDoStream {
 			time.Sleep(150 * time.Millisecond)
 			return hostOK(hostStreamStartResp{StatusCode: http.StatusOK, StreamID: "up-slow"}), nil
 		}
 		return hostOK(struct{}{}), nil
-	}))
+	})).env
 	if env.OK || env.Error == nil {
 		t.Fatalf("want error envelope, got %+v", env)
 	}
@@ -250,8 +281,5 @@ func TestExecuteStreamSlowDownstreamIsNotUpstreamIdle(t *testing.T) {
 		}
 		return upstream(method, payload)
 	}
-	_, closeErr := runLimitedStream(t, "stream-idle-timeout: 30ms\n", responder)
-	if closeErr != "" {
-		t.Fatalf("slow downstream closed the stream with error: %s", closeErr)
-	}
+	requireCompleteStream(t, runLimitedStream(t, "stream-idle-timeout: 30ms\n", responder), 4)
 }
