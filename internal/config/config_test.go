@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,14 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 		"api-keys:\n  - value: sensitive-secret-123\n  - value: sensitive-secret-123\n",
 		"api-keys:\n  - value: ${DEEPSEEK_MISSING_TEST_ENV}\n",
 		"api-keys:\n  - value: \"sensitive-secret-123\\nsecond-line\"\n",
+		base + "base-url: https://:443\n", base + "base-url: https://api.example.test?\n",
+		base + "base-url: https://api.example.test/a%2fb\n",
+		"api-keys:\n  - value: \"sensitive-secret-123\\tx\"\n",
+		"api-keys:\n  - value: \"sensitive-secret-123\\u0000x\"\n",
+		"api-keys:\n  - value: sensitive-secret-123" + strings.Repeat("x", MaxAPIKeyLength) + "\n",
+		"api-keys:\n  - {value: sensitive-secret-123, name: \"a\\u0007b\"}\n",
+		"api-keys:\n  - {value: sensitive-secret-123, name: " + strings.Repeat("n", MaxAPIKeyNameLength+1) + "}\n",
+		tooManyKeys(),
 	} {
 		t.Run(tc, func(t *testing.T) {
 			_, err := Load([]byte(tc))
@@ -45,6 +54,28 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 				t.Fatal("error leaked credential")
 			}
 		})
+	}
+}
+
+func tooManyKeys() string {
+	var b strings.Builder
+	b.WriteString("api-keys:\n")
+	for i := 0; i <= MaxAPIKeys; i++ {
+		fmt.Fprintf(&b, "  - value: sensitive-secret-%d\n", i)
+	}
+	return b.String()
+}
+
+func TestRejectExtraYAMLDocument(t *testing.T) {
+	base := "api-keys: [{value: sensitive-secret-123}]\n"
+	for _, tc := range []struct{ yaml, want string }{
+		{base + "---\napi-keys: []\n", "expected one YAML document"},
+		{base + "---\n[sensitive-secret-123\n", "invalid YAML structure near line"},
+	} {
+		_, err := Load([]byte(tc.yaml))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "sensitive-secret") {
+			t.Fatalf("Load(%q) error = %v, want %q", tc.yaml, err, tc.want)
+		}
 	}
 }
 

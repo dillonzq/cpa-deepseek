@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dillonzq/cpa-deepseek/internal/modelmeta"
 
@@ -26,6 +27,24 @@ const (
 	DefaultRequestTimeout   = 15 * time.Minute
 	DefaultMaxResponseBytes = int64(67108864) // 64 MiB
 )
+
+// API key limits.
+const (
+	MaxAPIKeys          = 256
+	MaxAPIKeyLength     = 4096
+	MaxAPIKeyNameLength = 256
+)
+
+var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
+
+// decodeError reports only the line of a YAML decode failure; the decoder's
+// message can quote node values, which may be credentials.
+func decodeError(err error) error {
+	if n := yamlLinePattern.FindStringSubmatch(err.Error()); n != nil {
+		return fmt.Errorf("decode config: invalid YAML structure near line %s", n[1])
+	}
+	return fmt.Errorf("decode config: invalid YAML structure")
+}
 
 type ModelPrefix struct {
 	Enabled bool
@@ -107,14 +126,13 @@ func Load(yamlBytes []byte) (Config, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(yamlBytes))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
-		if n := regexp.MustCompile(`line (\d+)`).FindStringSubmatch(err.Error()); n != nil {
-			return Config{}, fmt.Errorf("decode config: invalid YAML structure near line %s", n[1])
-		}
-		return Config{}, fmt.Errorf("decode config: invalid YAML structure")
+		return Config{}, decodeError(err)
 	}
 	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&extra); err == nil {
 		return Config{}, fmt.Errorf("decode config: expected one YAML document")
+	} else if !errors.Is(err, io.EOF) {
+		return Config{}, decodeError(err)
 	}
 	keys := make([]APIKey, len(raw.APIKeys))
 	for i, k := range raw.APIKeys {
@@ -210,12 +228,21 @@ func (c Config) validate() error {
 	if len(c.APIKeys) == 0 {
 		return fmt.Errorf("api-keys: at least one key is required")
 	}
+	if len(c.APIKeys) > MaxAPIKeys {
+		return fmt.Errorf("api-keys: at most %d keys are allowed", MaxAPIKeys)
+	}
 	for i, k := range c.APIKeys {
 		if k.Value == "" {
 			return fmt.Errorf("api-keys[%d].value: expanded to empty", i)
 		}
-		if strings.ContainsAny(k.Value, "\r\n") {
-			return fmt.Errorf("api-keys[%d]: headers must not contain newlines", i)
+		if len(k.Value) > MaxAPIKeyLength {
+			return fmt.Errorf("api-keys[%d].value: must be at most %d bytes", i, MaxAPIKeyLength)
+		}
+		if strings.IndexFunc(k.Value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return fmt.Errorf("api-keys[%d].value: must not contain whitespace or control characters", i)
+		}
+		if len(k.Name) > MaxAPIKeyNameLength || strings.IndexFunc(k.Name, unicode.IsControl) >= 0 {
+			return fmt.Errorf("api-keys[%d].name: must be at most %d bytes without control characters", i, MaxAPIKeyNameLength)
 		}
 	}
 	seen := make(map[string]bool, len(c.APIKeys))
@@ -245,13 +272,20 @@ func validateURL(name, raw string, allowHTTP bool) error {
 	if err != nil {
 		return fmt.Errorf("%s: invalid URL", name)
 	}
-	if u.Scheme == "" || u.Host == "" {
+	if u.Scheme == "" || u.Host == "" || u.Hostname() == "" {
 		// Echo only scheme://host — the configured string may embed
 		// userinfo credentials (https://user:key@host).
 		return fmt.Errorf("%s: invalid URL %s://%s", name, u.Scheme, u.Host)
 	}
-	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+	// ForceQuery catches a bare trailing "?": JoinUpstreamURL concatenates
+	// strings, so the endpoint path would land inside the query.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
 		return fmt.Errorf("%s: must not contain query, fragment, or userinfo", name)
+	}
+	// RawPath is set only when the path uses non-canonical percent-encoding;
+	// reject it so the configured path is unambiguous.
+	if u.RawPath != "" {
+		return fmt.Errorf("%s: path must not use non-canonical percent-encoding", name)
 	}
 	// Scheme allowlist: https always; http only behind
 	// allow-http; anything else (ftp://, file://, custom schemes) is
