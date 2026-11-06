@@ -19,7 +19,7 @@ cd "$root"
 target_os="$(go env GOOS)"
 target_arch="$(go env GOARCH)"
 case "$target_os" in
-  linux) extension=so ;;
+  linux | freebsd) extension=so ;;
   darwin) extension=dylib ;;
   windows) extension=dll ;;
   *) echo "Unsupported operating system: $target_os" >&2; exit 1 ;;
@@ -28,9 +28,17 @@ esac
 package="cpa-deepseek_${version}_${target_os}_${target_arch}"
 staging="$(mktemp -d "$output/.package.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
-CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
-  -ldflags "-s -w -X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=$version" \
-  -o "$staging/cpa-deepseek.$extension" .
+if [[ -n "${PREBUILT_LIBRARY:-}" ]]; then
+  # Package a library cross-compiled elsewhere; GOOS/GOARCH must name its target.
+  cp "$PREBUILT_LIBRARY" "$staging/cpa-deepseek.$extension"
+  for header in "${PREBUILT_LIBRARY%.*}.h" go-cross-bin.h; do
+    if [[ -f "$header" ]]; then cp "$header" "$staging/cpa-deepseek.h"; break; fi
+  done
+else
+  CGO_ENABLED=1 go build -trimpath -buildmode=c-shared \
+    -ldflags "-s -w -X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=$version" \
+    -o "$staging/cpa-deepseek.$extension" .
+fi
 cp README.md README.zh-CN.md LICENSE config.example.yaml "$staging/"
 cp -R assets "$staging/assets"
 

@@ -55,7 +55,8 @@
 | --- | --- | --- |
 | Linux | amd64 / arm64 | `cpa-deepseek.so` |
 | macOS | amd64 / arm64 | `cpa-deepseek.dylib` |
-| Windows | amd64 | `cpa-deepseek.dll` |
+| Windows | amd64 / arm64 | `cpa-deepseek.dll` |
+| FreeBSD | amd64 | `cpa-deepseek.so` |
 
 1. 解压产物，将匹配平台的动态库放入 CPA 插件目录，例如 Linux 下的 `plugins/cpa-deepseek.so`。分发安装包时保留 `LICENSE` 和图标来源说明。
 2. 添加下方[最小配置](#最小配置)，并在 **CPA 进程环境**中设置 `DEEPSEEK_API_KEY`。
@@ -277,7 +278,7 @@ CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.so .
 
 macOS 输出路径改为 `dist/cpa-deepseek.dylib`。Windows 在 `CGO_ENABLED=1` 且可用 C 编译器的环境中运行 `go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.dll .`。
 
-版本元数据默认是 `0.0.0-dev`，可通过 `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'` 注入，或运行 `bash scripts/package.sh v0.1.0`（需要 Python 3），生成当前 Go 目标平台的 `dist/cpa-deepseek_0.1.0_<goos>_<goarch>.zip`，动态库位于 ZIP 根目录。CI 配置了 Linux/macOS 的 amd64、arm64，以及 Windows amd64 构建。构建产物包含中英文 README、配置示例、许可证和图标来源说明。分支及 PR 构建使用 `0.0.0`；标签构建会准备 GitHub Release 草稿，附上五个平台的 ZIP，以及 `checksums.txt` 中的 SHA-256 校验值，详见[发布流程](RELEASE.md)。
+版本元数据默认是 `0.0.0-dev`，可通过 `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'` 注入，或运行 `bash scripts/package.sh v0.1.0`（需要 Python 3），生成当前 Go 目标平台的 `dist/cpa-deepseek_0.1.0_<goos>_<goarch>.zip`，动态库位于 ZIP 根目录。CI 配置了 Linux/macOS/Windows 的 amd64、arm64，以及 FreeBSD amd64 构建；Windows arm64 和 FreeBSD 在 Linux 上交叉编译。构建产物包含中英文 README、配置示例、许可证和图标来源说明。分支及 PR 构建使用 `0.0.0`；标签构建会准备 GitHub Release 草稿，附上七个平台的 ZIP，以及 `checksums.txt` 中的 SHA-256 校验值，详见[发布流程](RELEASE.md)。
 
 ## 测试
 
