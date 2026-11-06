@@ -74,9 +74,125 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
+  build-windows-arm64:
+    needs: test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=0.0.0
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            version="${REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build library
+        timeout-minutes: 45
+        uses: go-cross/cgo-actions@v1
+        env:
+          GOFLAGS: -trimpath -buildmode=c-shared
+        with:
+          dir: .
+          packages: .
+          targets: windows-arm64
+          out-dir: build/windows-arm64
+          output: cpa-deepseek.dll
+          flags: -ldflags=-s -w
+          x-flags: github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=${{ steps.version.outputs.version }}
+      - name: Package release archive
+        env:
+          GOOS: windows
+          GOARCH: arm64
+          PREBUILT_LIBRARY: build/windows-arm64/cpa-deepseek.dll
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/package.sh "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpa-deepseek-windows-arm64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  build-freebsd:
+    needs: test
+    runs-on: ubuntu-24.04
+    env:
+      FREEBSD_VERSION: '14.4'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            cc_arch: x86_64
+            # From the release's amd64/amd64/14.4-RELEASE/MANIFEST.
+            base_sha256: 769f60a6eea2938ad6b7943cfbcc17dfaf7d1f7ba59a32b869a00349302df853
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Prepare FreeBSD sysroot
+        timeout-minutes: 15
+        env:
+          FREEBSD_ARCH: ${{ matrix.arch }}
+          FREEBSD_BASE_SHA256: ${{ matrix.base_sha256 }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang lld
+          base_archive="$RUNNER_TEMP/freebsd-base.txz"
+          sysroot="$RUNNER_TEMP/freebsd-sysroot"
+          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 20 --max-time 180 \
+            --output "$base_archive" \
+            "https://download.freebsd.org/releases/$FREEBSD_ARCH/$FREEBSD_ARCH/$FREEBSD_VERSION-RELEASE/base.txz"
+          printf '%s  %s\n' "$FREEBSD_BASE_SHA256" "$base_archive" | sha256sum --check
+          mkdir -p "$sysroot"
+          tar --extract --xz --file "$base_archive" --directory "$sysroot" --no-same-owner ./usr/include ./usr/lib ./lib
+          echo "FREEBSD_SYSROOT=$sysroot" >> "$GITHUB_ENV"
+      - name: Build release archive
+        timeout-minutes: 45
+        env:
+          CGO_ENABLED: '1'
+          CGO_LDFLAGS: -fuse-ld=lld
+          GOOS: freebsd
+          GOARCH: ${{ matrix.arch }}
+          FREEBSD_CC_ARCH: ${{ matrix.cc_arch }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=0.0.0
+          if [[ "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            version="${REF_NAME#v}"
+          fi
+          export CC="clang --target=${FREEBSD_CC_ARCH}-unknown-freebsd${FREEBSD_VERSION} --sysroot=${FREEBSD_SYSROOT}"
+          bash scripts/package.sh "$version"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpa-deepseek-freebsd-${{ matrix.arch }}
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, build-windows-arm64, build-freebsd]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -100,6 +216,8 @@ jobs:
             "cpa-deepseek_${version}_darwin_amd64.zip"
             "cpa-deepseek_${version}_darwin_arm64.zip"
             "cpa-deepseek_${version}_windows_amd64.zip"
+            "cpa-deepseek_${version}_windows_arm64.zip"
+            "cpa-deepseek_${version}_freebsd_amd64.zip"
           )
           for archive in "${expected[@]}"; do test -s "$archive"; done
           python3 - "${expected[@]}" <<'PY'
@@ -107,7 +225,7 @@ jobs:
           import sys
           import zipfile
 
-          extensions = {"linux": ".so", "darwin": ".dylib", "windows": ".dll"}
+          extensions = {"linux": ".so", "freebsd": ".so", "darwin": ".dylib", "windows": ".dll"}
           for filename in sys.argv[1:]:
               target_os = pathlib.Path(filename).stem.split("_")[-2]
               library = "cpa-deepseek" + extensions[target_os]
