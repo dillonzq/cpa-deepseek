@@ -39,7 +39,7 @@ The plugin ID is `cpa-deepseek`. The provider ID, credential type and default mo
 - **Multiple named credentials.** Stable key-derived identities, selected-key execution and a shared CPA scheduler across protocols.
 - **Native CPA v8 quotas.** Fetch fresh account balances for the selected credential, with separate CNY/USD currency summaries and account availability.
 - **Targeted cooldown recovery.** Restore a selected credential through CPA's native cooldown reset endpoint after a top-up or transient failure.
-- **Cancellable HTTP.** Requests use CPA host HTTP operations; disconnects, timeouts and plugin shutdown cancel upstream work and release streams.
+- **Cancellable HTTP.** Requests use CPA host HTTP operations; disconnects, timeouts and plugin shutdown cancel upstream work and release streams. A stream that keeps receiving data is not cut off by `request-timeout`; it ends when silent for `stream-idle-timeout` or after `max-stream-duration`, and the downstream error names the limit hit.
 
 ## Requirements
 
@@ -120,7 +120,9 @@ The [complete example](config.example.yaml) includes the default settings.
 | `catalog.stale-while-unavailable` | `true` | Retain the last successful discovery snapshot during outages |
 | `models` | empty | Model declarations, aliases and metadata overrides |
 | `quota.timeout` | `15s` | Balance lookup or credential validation timeout, at most `1m` |
-| `request-timeout` | `15m` | Total upstream request timeout, including streams |
+| `request-timeout` | `5m` | Timeout for a whole non-streaming request, or for opening a stream (until the upstream status arrives); it does not limit an open stream |
+| `stream-idle-timeout` | `5m` | Maximum silence between upstream stream chunks; each chunk restarts it, and time spent delivering chunks downstream does not count |
+| `max-stream-duration` | `1h` | Maximum lifetime of one stream, counted from the start of opening, however active it is |
 | `max-response-bytes` | `67108864` | Accepted non-streaming response size or cumulative stream size: 64 MiB |
 | `allow-http` | `false` | Allow HTTP for local test servers |
 

@@ -18,7 +18,9 @@ plugins:
         stale-while-unavailable: true
       quota:
         timeout: 15s
-      request-timeout: 15m
+      request-timeout: 5m
+      stream-idle-timeout: 5m
+      max-stream-duration: 1h
       max-response-bytes: 67108864
       # Optional: add models, publish aliases, or override metadata returned by /models.
       # 可选：补充模型、发布别名或覆盖 /models 返回的元数据。

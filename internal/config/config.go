@@ -18,11 +18,13 @@ import (
 )
 
 const (
-	DefaultBaseURL                = "https://api.deepseek.com"
-	DefaultRequestTimeout         = 15 * time.Minute
-	DefaultQuotaTimeout           = 15 * time.Second
-	DefaultRefreshInterval        = 15 * time.Minute
-	DefaultMaxResponseBytes int64 = 64 << 20
+	DefaultBaseURL                 = "https://api.deepseek.com"
+	DefaultRequestTimeout          = 5 * time.Minute
+	DefaultStreamIdleTimeout       = 5 * time.Minute
+	DefaultMaxStreamDuration       = time.Hour
+	DefaultQuotaTimeout            = 15 * time.Second
+	DefaultRefreshInterval         = 15 * time.Minute
+	DefaultMaxResponseBytes  int64 = 64 << 20
 )
 
 type Credential struct {
@@ -51,10 +53,17 @@ type Config struct {
 		RefreshInterval       time.Duration
 		StaleWhileUnavailable bool
 	}
-	QuotaTimeout     time.Duration
-	RequestTimeout   time.Duration
-	MaxResponseBytes int64
-	AllowHTTP        bool
+	QuotaTimeout time.Duration
+	// RequestTimeout bounds a whole non-streaming request, or only the
+	// opening of a stream.
+	RequestTimeout time.Duration
+	// StreamIdleTimeout bounds the silence between upstream stream chunks;
+	// each chunk restarts it.
+	StreamIdleTimeout time.Duration
+	// MaxStreamDuration bounds one stream's whole lifetime, opening included.
+	MaxStreamDuration time.Duration
+	MaxResponseBytes  int64
+	AllowHTTP         bool
 }
 
 type rawConfig struct {
@@ -76,9 +85,11 @@ type rawConfig struct {
 	Quota struct {
 		Timeout *string `yaml:"timeout"`
 	} `yaml:"quota"`
-	RequestTimeout   *string `yaml:"request-timeout"`
-	MaxResponseBytes *int64  `yaml:"max-response-bytes"`
-	AllowHTTP        bool    `yaml:"allow-http"`
+	RequestTimeout    *string `yaml:"request-timeout"`
+	StreamIdleTimeout *string `yaml:"stream-idle-timeout"`
+	MaxStreamDuration *string `yaml:"max-stream-duration"`
+	MaxResponseBytes  *int64  `yaml:"max-response-bytes"`
+	AllowHTTP         bool    `yaml:"allow-http"`
 }
 
 // Load never returns YAML values in errors: even malformed nodes can contain keys.
@@ -103,6 +114,12 @@ func Load(data []byte) (Config, error) {
 		return Config{}, err
 	}
 	if c.RequestTimeout, err = duration("request-timeout", raw.RequestTimeout, DefaultRequestTimeout); err != nil {
+		return Config{}, err
+	}
+	if c.StreamIdleTimeout, err = duration("stream-idle-timeout", raw.StreamIdleTimeout, DefaultStreamIdleTimeout); err != nil {
+		return Config{}, err
+	}
+	if c.MaxStreamDuration, err = duration("max-stream-duration", raw.MaxStreamDuration, DefaultMaxStreamDuration); err != nil {
 		return Config{}, err
 	}
 	if c.QuotaTimeout, err = duration("quota.timeout", raw.Quota.Timeout, DefaultQuotaTimeout); err != nil {
