@@ -198,6 +198,65 @@ func TestExecuteStreamOpenTimeout(t *testing.T) {
 	}
 }
 
+func TestExecuteStreamErrorBodyCutByLimit(t *testing.T) {
+	// A stalled error body is cut off by whichever limit expires first; the
+	// envelope keeps the upstream status and names that limit.
+	for _, tc := range []struct {
+		name, yaml string
+		limit      error
+	}{
+		{"request-timeout", "request-timeout: 30ms\n", errStreamOpenTimeout},
+		{"max-stream-duration", "request-timeout: 1h\nmax-stream-duration: 30ms\n", errMaxStreamDuration},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			release := make(chan struct{})
+			var once atomic.Bool
+			start := time.Now()
+			env := runLimitedStream(t, tc.yaml, withCatalog(func(method string, _ []byte) ([]byte, error) {
+				switch method {
+				case pluginabi.MethodHostHTTPDoStream:
+					return hostOK(hostStreamStartResp{StatusCode: http.StatusTooManyRequests, StreamID: "up-stall"}), nil
+				case pluginabi.MethodHostHTTPStreamRead:
+					<-release
+					return hostOK(hostStreamReadResp{Error: "closed", Done: true}), nil
+				case pluginabi.MethodHostHTTPStreamClose:
+					if once.CompareAndSwap(false, true) {
+						close(release)
+					}
+				}
+				return hostOK(struct{}{}), nil
+			})).env
+			if env.OK || env.Error == nil || env.Error.HTTPStatus != http.StatusTooManyRequests {
+				t.Fatalf("want 429 error envelope, got %+v", env)
+			}
+			if !strings.Contains(env.Error.Message, "error body read interrupted: "+tc.limit.Error()) {
+				t.Fatalf("message = %q, want the %s limit", env.Error.Message, tc.name)
+			}
+			if elapsed := time.Since(start); elapsed > 2*time.Second {
+				t.Fatalf("stalled error body unblocked after %v", elapsed)
+			}
+		})
+	}
+}
+
+func TestExecuteStreamErrorBodyWithinLimitHasNoNote(t *testing.T) {
+	env := runLimitedStream(t, "", withCatalog(func(method string, _ []byte) ([]byte, error) {
+		switch method {
+		case pluginabi.MethodHostHTTPDoStream:
+			return hostOK(hostStreamStartResp{StatusCode: http.StatusBadRequest, StreamID: "up-err"}), nil
+		case pluginabi.MethodHostHTTPStreamRead:
+			return hostOK(hostStreamReadResp{Payload: []byte(`{"error":{"message":"bad request"}}`), Done: true}), nil
+		}
+		return hostOK(struct{}{}), nil
+	})).env
+	if env.OK || env.Error == nil || env.Error.HTTPStatus != http.StatusBadRequest {
+		t.Fatalf("want 400 error envelope, got %+v", env)
+	}
+	if strings.Contains(env.Error.Message, "interrupted") {
+		t.Fatalf("message = %q, want no limit note", env.Error.Message)
+	}
+}
+
 func TestStreamStopMessage(t *testing.T) {
 	for _, tc := range []struct {
 		cause error

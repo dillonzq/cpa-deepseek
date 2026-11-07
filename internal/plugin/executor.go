@@ -243,8 +243,8 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 		Body:    upstreamBody,
 	})
 	if err != nil {
-		if cause := context.Cause(ctx); errors.Is(cause, errStreamOpenTimeout) || errors.Is(cause, errMaxStreamDuration) {
-			err = fmt.Errorf("%w: %w", cause, err)
+		if limit := streamLimitCause(ctx); limit != nil {
+			err = fmt.Errorf("%w: %w", limit, err)
 		}
 		return classEnvelope(errclass.FromNetwork(err)), nil
 	}
@@ -256,6 +256,7 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 	}
 	if st != http.StatusOK {
 		var body []byte
+		var cutBy error // the limit that interrupted the error-body read
 		if id != "" {
 			var once sync.Once
 			closeUpstream := func() { once.Do(func() { _ = m.bridge.StreamClose(id) }) }
@@ -269,11 +270,23 @@ func (m *Manager) executeStream(req executorRequest) ([]byte, error) {
 				}
 			}()
 			body, _, _, _ = m.bridge.StreamRead(id)
+			cutBy = streamLimitCause(ctx)
 			closeUpstream()
 			close(watchDone)
 			<-watchExited
 		}
-		return classEnvelope(selectedStatusError(st, body, res.key)), nil
+		// Classify by the status and whatever body arrived, so a 429 still
+		// cools the key; only the message names a limit that cut the read.
+		statusErr := selectedStatusError(st, body, res.key)
+		if cutBy != nil {
+			note := "error body read interrupted: " + cutBy.Error()
+			if statusErr.Message == "" {
+				statusErr.Message = note
+			} else {
+				statusErr.Message += " (" + note + ")"
+			}
+		}
+		return classEnvelope(statusErr), nil
 	}
 
 	if id == "" {
@@ -417,13 +430,22 @@ func (l *streamLimits) stop() {
 	}
 }
 
-// streamStopMessage is the downstream error for a stream whose context ended.
-func streamStopMessage(ctx context.Context) string {
+// streamLimitCause returns the stream limit that canceled ctx, or nil when
+// ctx is live or was canceled for another reason.
+func streamLimitCause(ctx context.Context) error {
 	cause := context.Cause(ctx)
 	for _, limit := range []error{errStreamOpenTimeout, errStreamIdleTimeout, errMaxStreamDuration} {
 		if errors.Is(cause, limit) {
-			return limit.Error()
+			return limit
 		}
+	}
+	return nil
+}
+
+// streamStopMessage is the downstream error for a stream whose context ended.
+func streamStopMessage(ctx context.Context) string {
+	if limit := streamLimitCause(ctx); limit != nil {
+		return limit.Error()
 	}
 	return "stream canceled"
 }

@@ -120,7 +120,7 @@ The [complete example](config.example.yaml) includes the default settings.
 | `catalog.stale-while-unavailable` | `true` | Retain the last successful discovery snapshot during outages |
 | `models` | empty | Model declarations, aliases and metadata overrides |
 | `quota.timeout` | `15s` | Balance lookup or credential validation timeout, at most `1m` |
-| `request-timeout` | `5m` | Timeout for a whole non-streaming request, or for opening a stream (until the upstream status arrives); it does not limit an open stream |
+| `request-timeout` | `5m` | Timeout for a whole non-streaming request, or for opening a stream (until the upstream status arrives, and for a status other than 200 also while its error body is read); it does not limit an open stream |
 | `stream-idle-timeout` | `5m` | Maximum silence between upstream stream chunks; each chunk restarts it, and time spent delivering chunks downstream does not count |
 | `max-stream-duration` | `1h` | Maximum lifetime of one stream, counted from the start of opening, however active it is |
 | `max-response-bytes` | `67108864` | Accepted non-streaming response size or cumulative stream size: 64 MiB |
