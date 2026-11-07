@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/dillonzq/cpa-deepseek/internal/catalog"
 	"github.com/dillonzq/cpa-deepseek/internal/config"
@@ -241,17 +242,64 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	}
 	for _, key := range cfg.APIKeys {
 		id := credentialID(key.Value)
-		name := id + ".json"
-		if existing[id] || existing[name] {
+		if existing[id] || existing[id+".json"] {
 			continue
 		}
-		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": accountLabel(cfg, key.Value, ""), "api_key": key.Value})
+		label := accountLabel(cfg, key.Value, "")
+		name := availableAuthName(label, existing)
+		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": label, "api_key": key.Value})
 		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{Name: name, JSON: record}); err != nil {
 			return err
 		}
 		existing[id], existing[name] = true, true
 	}
 	return nil
+}
+
+// availableAuthName derives a readable, unused credential filename from the
+// label: management clients show the filename instead of Label. Identity
+// stays the key-derived ID stored inside the record.
+func availableAuthName(label string, existing map[string]bool) string {
+	base := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, label)
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = pluginDisplayName
+	}
+	if runes := []rune(base); len(runes) > 80 {
+		base = string(runes[:80])
+	}
+	// Device basenames stay reserved on Windows even with an extension.
+	if isWindowsDeviceName(base) {
+		base = pluginDisplayName + "-" + base
+	}
+	name := base + ".json"
+	for n := 2; ; n++ {
+		collision := false
+		for existingName := range existing {
+			if strings.EqualFold(name, existingName) {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d.json", base, n)
+	}
+}
+
+func isWindowsDeviceName(base string) bool {
+	upper := strings.ToUpper(base)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	return len(upper) == 4 && (upper[:3] == "COM" || upper[:3] == "LPT") && upper[3] >= '1' && upper[3] <= '9'
 }
 
 func (m *Manager) handleModels(active bool) ([]byte, error) {

@@ -105,7 +105,7 @@ api-keys:
     value: "${DEEPSEEK_TEAM_API_KEY}"
 ```
 
-每项支持 `name` 和 `value`，至少需要一个非空 key，重复 key 会被拒绝。**同一 DeepSeek 账户下的不同 key 共享账户余额和并发限制**；增加 key 数量不会增加该账户额度。
+每项支持 `name` 和 `value`，至少需要一个非空 key，重复 key 会被拒绝。`name` 同时决定管理页显示的凭据文件名（如 `Personal.json`），仅在首次创建凭据时生效；改名后需删除已有凭据才会按新名称重建。**同一 DeepSeek 账户下的不同 key 共享账户余额和并发限制**；增加 key 数量不会增加该账户额度。
 
 ### 配置选项
 

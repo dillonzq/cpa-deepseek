@@ -105,7 +105,7 @@ api-keys:
     value: "${DEEPSEEK_TEAM_API_KEY}"
 ```
 
-Each entry accepts `name` and `value`. At least one non-empty key is required, and duplicate keys are rejected. Different keys for the **same DeepSeek account share its balance and concurrency limits**; a larger key pool does not increase that account's quota.
+Each entry accepts `name` and `value`. `name` also becomes the credential filename shown in the management UI (for example `Personal.json`); it is applied only when the credential is first created, so delete an existing credential to pick up a new name. At least one non-empty key is required, and duplicate keys are rejected. Different keys for the **same DeepSeek account share its balance and concurrency limits**; a larger key pool does not increase that account's quota.
 
 ### Configuration options
 
