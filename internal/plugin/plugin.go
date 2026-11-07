@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/dillonzq/cpa-deepseek/internal/catalog"
 	"github.com/dillonzq/cpa-deepseek/internal/config"
@@ -236,22 +239,117 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		return err
 	}
 	existing := map[string]bool{}
+	authDir := ""
 	for _, entry := range entries {
 		existing[entry.Name], existing[entry.ID] = true, true
+		if authDir == "" && filepath.IsAbs(entry.Path) {
+			authDir = filepath.Dir(entry.Path)
+		}
+		// v8 lists disk files without IDs before the auth manager is ready, and
+		// identifies host-saved files by path rather than the record's id.
+		// Readable filenames no longer encode identity, so recover it from the
+		// record itself; an unreadable record at worst yields one duplicate.
+		if (entry.Provider == ProviderID || entry.Type == ProviderID) && !strings.HasPrefix(entry.ID, "deepseek-key-") {
+			if key := readAuthRecordKey(entry.Path); key != "" {
+				existing[credentialID(key)] = true
+			}
+		}
 	}
 	for _, key := range cfg.APIKeys {
 		id := credentialID(key.Value)
-		name := id + ".json"
-		if existing[id] || existing[name] {
+		if existing[id] || existing[id+".json"] {
 			continue
 		}
-		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": accountLabel(cfg, key.Value, ""), "api_key": key.Value})
+		label := accountLabel(cfg, key.Value, "")
+		// AuthSave overwrites, and AuthList can omit files the auth manager did
+		// not load (e.g. invalid JSON), so never pick a name already on disk.
+		// Without a listed path the directory cannot be checked; fall back to
+		// the key-derived name, which only this key's record can occupy.
+		name := id + ".json"
+		if authDir != "" {
+			name = availableAuthName(label, existing)
+			for fileExists(filepath.Join(authDir, name)) {
+				existing[name] = true
+				name = availableAuthName(label, existing)
+			}
+		}
+		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": label, "api_key": key.Value})
 		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{Name: name, JSON: record}); err != nil {
 			return err
 		}
 		existing[id], existing[name] = true, true
 	}
 	return nil
+}
+
+// readAuthRecordKey reads the api_key of a host-reported auth file. It is
+// only used for identity; the key never reaches logs or errors.
+func readAuthRecordKey(path string) string {
+	if !filepath.IsAbs(path) {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		APIKey string `json:"api_key"`
+	}
+	if json.Unmarshal(raw, &record) != nil {
+		return ""
+	}
+	return strings.TrimSpace(record.APIKey)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// availableAuthName derives a readable, unused credential filename from the
+// label: management clients show the filename instead of Label. Identity
+// stays the key-derived ID stored inside the record.
+func availableAuthName(label string, existing map[string]bool) string {
+	base := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, label)
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = pluginDisplayName
+	}
+	if runes := []rune(base); len(runes) > 80 {
+		base = string(runes[:80])
+	}
+	// Device basenames stay reserved on Windows even with an extension.
+	if isWindowsDeviceName(base) {
+		base = pluginDisplayName + "-" + base
+	}
+	name := base + ".json"
+	for n := 2; ; n++ {
+		collision := false
+		for existingName := range existing {
+			if strings.EqualFold(name, existingName) {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d.json", base, n)
+	}
+}
+
+func isWindowsDeviceName(base string) bool {
+	upper := strings.ToUpper(base)
+	switch upper {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	return len(upper) == 4 && (upper[:3] == "COM" || upper[:3] == "LPT") && upper[3] >= '1' && upper[3] <= '9'
 }
 
 func (m *Manager) handleModels(active bool) ([]byte, error) {
