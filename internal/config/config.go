@@ -1,4 +1,4 @@
-// Package config defines the plugin's v8 configuration.
+// Package config loads and validates the DeepSeek plugin configuration.
 package config
 
 import (
@@ -14,192 +14,324 @@ import (
 	"unicode"
 
 	"github.com/dillonzq/cpa-deepseek/internal/modelmeta"
+
 	"gopkg.in/yaml.v3"
 )
 
+// Defaults.
 const (
-	DefaultBaseURL                = "https://api.deepseek.com"
-	DefaultRequestTimeout         = 15 * time.Minute
-	DefaultQuotaTimeout           = 15 * time.Second
-	DefaultRefreshInterval        = 15 * time.Minute
-	DefaultMaxResponseBytes int64 = 64 << 20
+	DefaultBaseURL          = "https://api.deepseek.com"
+	DefaultQuotaTimeout     = 15 * time.Second
+	DefaultModelPrefix      = "deepseek"
+	DefaultRefreshInterval  = 15 * time.Minute
+	DefaultRequestTimeout   = 15 * time.Minute
+	DefaultMaxResponseBytes = int64(67108864) // 64 MiB
 )
 
-type Credential struct {
-	Name  string `yaml:"name"`
-	Value string `yaml:"value"`
+// API key limits.
+const (
+	MaxAPIKeys          = 256
+	MaxAPIKeyLength     = 4096
+	MaxAPIKeyNameLength = 256
+)
+
+var yamlLinePattern = regexp.MustCompile(`line (\d+)`)
+
+// decodeError reports only the line of a YAML decode failure; the decoder's
+// message can quote node values, which may be credentials.
+func decodeError(err error) error {
+	if n := yamlLinePattern.FindStringSubmatch(err.Error()); n != nil {
+		return fmt.Errorf("decode config: invalid YAML structure near line %s", n[1])
+	}
+	return fmt.Errorf("decode config: invalid YAML structure")
 }
 
-type Model struct {
+type ModelPrefix struct {
+	Enabled bool
+	Value   string
+}
+
+type APIKey struct {
+	Name  string
+	Value string
+}
+
+type Catalog struct {
+	RefreshInterval       time.Duration
+	StaleWhileUnavailable bool
+}
+
+type Config struct {
+	Models           []ModelOverride
+	BaseURL          string
+	QuotaTimeout     time.Duration
+	ModelPrefix      ModelPrefix
+	APIKeys          []APIKey
+	Catalog          Catalog
+	AllowHTTP        bool
+	RequestTimeout   time.Duration
+	MaxResponseBytes int64
+}
+
+type ModelOverride struct {
 	Name string `yaml:"name"`
-	// Alias replaces Name in the published model ID, following CPA's
-	// name/alias convention. The model prefix still applies, and requests
-	// still send Name upstream.
+	// Alias replaces the upstream name in the published model ID; the
+	// model prefix still applies. Requests still send Name upstream.
 	Alias              string `yaml:"alias"`
 	modelmeta.Metadata `yaml:",inline"`
 }
 
-type Config struct {
-	Credentials []Credential
-	BaseURL     string
-	Models      []Model
-	ModelPrefix struct {
-		Enabled bool
-		Value   string
-	}
-	Catalog struct {
-		RefreshInterval       time.Duration
-		StaleWhileUnavailable bool
-	}
-	QuotaTimeout     time.Duration
-	RequestTimeout   time.Duration
-	MaxResponseBytes int64
-	AllowHTTP        bool
-}
-
+// rawConfig mirrors the YAML shape; pointer fields distinguish "unset"
+// (apply default) from explicitly-set values including "" (validate as-is).
+// Host-owned plugin controls are accepted alongside plugin settings.
 type rawConfig struct {
-	// CPA passes its plugin controls alongside provider-owned settings.
-	Enabled     *bool          `yaml:"enabled"`
-	Priority    int            `yaml:"priority"`
-	Store       map[string]any `yaml:"store"`
-	Credentials []Credential   `yaml:"api-keys"`
-	BaseURL     *string        `yaml:"base-url"`
-	Models      []Model        `yaml:"models"`
-	ModelPrefix struct {
-		Enabled *bool   `yaml:"enabled"`
-		Value   *string `yaml:"value"`
-	} `yaml:"model-prefix"`
-	Catalog struct {
-		RefreshInterval       *string `yaml:"refresh-interval"`
-		StaleWhileUnavailable *bool   `yaml:"stale-while-unavailable"`
-	} `yaml:"catalog"`
-	Quota struct {
+	Enabled  *bool           `yaml:"enabled"`
+	Priority int             `yaml:"priority"`
+	Store    map[string]any  `yaml:"store"`
+	Models   []ModelOverride `yaml:"models"`
+	BaseURL  *string         `yaml:"base-url"`
+	Quota    struct {
 		Timeout *string `yaml:"timeout"`
 	} `yaml:"quota"`
-	RequestTimeout   *string `yaml:"request-timeout"`
-	MaxResponseBytes *int64  `yaml:"max-response-bytes"`
-	AllowHTTP        bool    `yaml:"allow-http"`
+	ModelPrefix      rawPrefix   `yaml:"model-prefix"`
+	APIKeys          []rawAPIKey `yaml:"api-keys"`
+	Catalog          rawCatalog  `yaml:"catalog"`
+	AllowHTTP        bool        `yaml:"allow-http"`
+	RequestTimeout   *string     `yaml:"request-timeout"`
+	MaxResponseBytes *int64      `yaml:"max-response-bytes"`
 }
 
-// Load never returns YAML values in errors: even malformed nodes can contain keys.
-func Load(data []byte) (Config, error) {
+type rawPrefix struct {
+	Enabled *bool   `yaml:"enabled"`
+	Value   *string `yaml:"value"`
+}
+
+type rawAPIKey struct {
+	Name  string `yaml:"name"`
+	Value string `yaml:"value"`
+}
+
+type rawCatalog struct {
+	RefreshInterval       *string `yaml:"refresh-interval"`
+	StaleWhileUnavailable *bool   `yaml:"stale-while-unavailable"`
+}
+
+// Load decodes YAML, expands ${VAR} references in api-keys[].value only,
+// applies defaults, and validates. Unknown settings are rejected. Decode
+// errors never echo decoded node values — a malformed entry (e.g. a
+// bare-scalar API key) must not leak into the invalid_config envelope the
+// host logs.
+func Load(yamlBytes []byte) (Config, error) {
 	var raw rawConfig
-	d := yaml.NewDecoder(bytes.NewReader(data))
-	d.KnownFields(true)
-	if err := d.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
-		return Config{}, fmt.Errorf("invalid plugin YAML structure or unknown setting")
+	decoder := yaml.NewDecoder(bytes.NewReader(yamlBytes))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
+		return Config{}, decodeError(err)
 	}
 	var extra any
-	if err := d.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Config{}, fmt.Errorf("expected one YAML document")
+	if err := decoder.Decode(&extra); err == nil {
+		return Config{}, fmt.Errorf("decode config: expected one YAML document")
+	} else if !errors.Is(err, io.EOF) {
+		return Config{}, decodeError(err)
 	}
-	c := Config{Credentials: raw.Credentials, Models: raw.Models, AllowHTTP: raw.AllowHTTP,
-		BaseURL:          strings.TrimRight(value(raw.BaseURL, DefaultBaseURL), "/"),
-		MaxResponseBytes: value(raw.MaxResponseBytes, DefaultMaxResponseBytes)}
-	c.ModelPrefix.Enabled, c.ModelPrefix.Value = value(raw.ModelPrefix.Enabled, true), value(raw.ModelPrefix.Value, "deepseek")
-	c.Catalog.StaleWhileUnavailable = value(raw.Catalog.StaleWhileUnavailable, true)
-	var err error
-	if c.Catalog.RefreshInterval, err = duration("catalog.refresh-interval", raw.Catalog.RefreshInterval, DefaultRefreshInterval); err != nil {
+	keys := make([]APIKey, len(raw.APIKeys))
+	for i, k := range raw.APIKeys {
+		keys[i] = APIKey{Value: strings.TrimSpace(os.ExpandEnv(k.Value)), Name: strings.TrimSpace(k.Name)}
+	}
+	refreshInterval, err := parseDuration("catalog.refresh-interval", raw.Catalog.RefreshInterval, DefaultRefreshInterval)
+	if err != nil {
 		return Config{}, err
 	}
-	if c.RequestTimeout, err = duration("request-timeout", raw.RequestTimeout, DefaultRequestTimeout); err != nil {
+	requestTimeout, err := parseDuration("request-timeout", raw.RequestTimeout, DefaultRequestTimeout)
+	if err != nil {
 		return Config{}, err
 	}
-	if c.QuotaTimeout, err = duration("quota.timeout", raw.Quota.Timeout, DefaultQuotaTimeout); err != nil {
+	if requestTimeout <= 0 {
+		return Config{}, fmt.Errorf("request-timeout: must be positive")
+	}
+	quotaTimeout, err := parseDuration("quota.timeout", raw.Quota.Timeout, DefaultQuotaTimeout)
+	if err != nil {
 		return Config{}, err
 	}
-	if c.Catalog.RefreshInterval < time.Minute {
-		return Config{}, fmt.Errorf("catalog.refresh-interval must be at least 1m")
+	if quotaTimeout <= 0 || quotaTimeout > time.Minute {
+		return Config{}, fmt.Errorf("quota.timeout: must be positive and at most 1m")
 	}
-	if c.QuotaTimeout > time.Minute {
-		return Config{}, fmt.Errorf("quota.timeout must be at most 1m")
+	c := Config{
+		Models:       raw.Models,
+		BaseURL:      strings.TrimRight(orDefault(raw.BaseURL, DefaultBaseURL), "/"),
+		QuotaTimeout: quotaTimeout,
+		ModelPrefix: ModelPrefix{
+			Enabled: orDefault(raw.ModelPrefix.Enabled, true),
+			Value:   orDefault(raw.ModelPrefix.Value, DefaultModelPrefix),
+		},
+		APIKeys: keys,
+		Catalog: Catalog{
+			RefreshInterval:       refreshInterval,
+			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
+		},
+		AllowHTTP:        raw.AllowHTTP,
+		RequestTimeout:   requestTimeout,
+		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
 	}
-	if c.MaxResponseBytes <= 0 || c.MaxResponseBytes > 1<<30 {
-		return Config{}, fmt.Errorf("max-response-bytes must be between 1 and 1073741824")
-	}
-	if c.ModelPrefix.Enabled && !identifier.MatchString(c.ModelPrefix.Value) {
-		return Config{}, fmt.Errorf("invalid model-prefix.value")
-	}
-	u, err := url.Parse(c.BaseURL)
-	if err != nil || u.Host == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawPath != "" || (u.Scheme != "https" && !(u.Scheme == "http" && c.AllowHTTP)) {
-		return Config{}, fmt.Errorf("base-url must be an HTTPS URL without userinfo, query or fragment (HTTP requires allow-http)")
-	}
-	if len(c.Credentials) == 0 || len(c.Credentials) > 256 {
-		return Config{}, fmt.Errorf("api-keys must contain 1 to 256 entries")
-	}
-	seen := map[string]bool{}
-	for i := range c.Credentials {
-		k := &c.Credentials[i]
-		k.Value = strings.TrimSpace(os.ExpandEnv(k.Value))
-		k.Name = strings.TrimSpace(k.Name)
-		if k.Value == "" || len(k.Value) > 4096 || strings.IndexFunc(k.Value, unicode.IsSpace) >= 0 || strings.IndexFunc(k.Value, unicode.IsControl) >= 0 {
-			return Config{}, fmt.Errorf("api-keys[%d].value is empty or invalid", i)
-		}
-		if len(k.Name) > 256 || strings.IndexFunc(k.Name, unicode.IsControl) >= 0 {
-			return Config{}, fmt.Errorf("api-keys[%d].name is invalid", i)
-		}
-		if seen[k.Value] {
-			return Config{}, fmt.Errorf("duplicate credential key")
-		}
-		seen[k.Value] = true
-	}
-	models, aliases := map[string]bool{}, map[string]bool{}
-	for i, m := range c.Models {
-		if !modelID.MatchString(m.Name) || models[m.Name] {
-			return Config{}, fmt.Errorf("models[%d].name is invalid or duplicated", i)
-		}
-		models[m.Name] = true
-		if m.Alias != "" {
-			if !modelID.MatchString(m.Alias) || aliases[m.Alias] {
-				return Config{}, fmt.Errorf("models[%d].alias is invalid or duplicated", i)
-			}
-			aliases[m.Alias] = true
-		}
-		if m.Context != nil && *m.Context < 0 || m.Output != nil && *m.Output < 0 {
-			return Config{}, fmt.Errorf("models[%d] token limits must be non-negative", i)
-		}
-		if t := m.Thinking; t != nil {
-			if t.Min != nil && *t.Min < 0 || t.Max != nil && *t.Max < 0 || t.Min != nil && t.Max != nil && *t.Min > *t.Max {
-				return Config{}, fmt.Errorf("models[%d].thinking has invalid bounds", i)
-			}
-		}
+	if err := c.validate(); err != nil {
+		return Config{}, err
 	}
 	return c, nil
 }
 
-var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-var modelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
-
-func duration(name string, p *string, def time.Duration) (time.Duration, error) {
-	if p == nil {
-		return def, nil
+// PublicID returns the client-facing model ID.
+func PublicID(c Config, upstreamID string) string {
+	if c.ModelPrefix.Enabled {
+		return c.ModelPrefix.Value + "/" + upstreamID
 	}
-	d, err := time.ParseDuration(*p)
-	if err != nil || d <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
-	}
-	return d, nil
+	return upstreamID
 }
 
-func value[T any](p *T, def T) T {
-	if p != nil {
-		return *p
-	}
-	return def
-}
-
-func (c Config) HasCredential(key string) bool {
-	for _, k := range c.Credentials {
-		if k.Value == key {
+// HasAPIKey prevents persisted records for removed keys from executing.
+// An unconfigured plugin has no keys, so it accepts none.
+func (c Config) HasAPIKey(key string) bool {
+	for _, entry := range c.APIKeys {
+		if entry.Value == key {
 			return true
 		}
 	}
 	return false
 }
 
-func PublicID(c Config, model string) string {
-	if c.ModelPrefix.Enabled {
-		return c.ModelPrefix.Value + "/" + model
+func (c Config) validate() error {
+	seenModels := map[string]bool{}
+	seenAliases := map[string]bool{}
+	for i, model := range c.Models {
+		if strings.TrimSpace(model.Name) == "" || seenModels[model.Name] {
+			return fmt.Errorf("models[%d].name: must be non-empty and unique", i)
+		}
+		seenModels[model.Name] = true
+		if model.Alias != "" {
+			if strings.TrimSpace(model.Alias) != model.Alias || seenAliases[model.Alias] {
+				return fmt.Errorf("models[%d].alias: must be unique without surrounding whitespace", i)
+			}
+			seenAliases[model.Alias] = true
+		}
+		if model.Context != nil && *model.Context < 0 || model.Output != nil && *model.Output < 0 {
+			return fmt.Errorf("models[%d]: token limits must be non-negative", i)
+		}
+		if model.Thinking != nil {
+			t := model.Thinking
+			if t.Min != nil && *t.Min < 0 || t.Max != nil && *t.Max < 0 || t.Min != nil && t.Max != nil && *t.Min > *t.Max {
+				return fmt.Errorf("models[%d].thinking: invalid budget range", i)
+			}
+		}
 	}
-	return model
+	if err := validateURL("base-url", c.BaseURL, c.AllowHTTP); err != nil {
+		return err
+	}
+	if len(c.APIKeys) == 0 {
+		return fmt.Errorf("api-keys: at least one key is required")
+	}
+	if len(c.APIKeys) > MaxAPIKeys {
+		return fmt.Errorf("api-keys: at most %d keys are allowed", MaxAPIKeys)
+	}
+	for i, k := range c.APIKeys {
+		if k.Value == "" {
+			return fmt.Errorf("api-keys[%d].value: expanded to empty", i)
+		}
+		if len(k.Value) > MaxAPIKeyLength {
+			return fmt.Errorf("api-keys[%d].value: must be at most %d bytes", i, MaxAPIKeyLength)
+		}
+		if strings.IndexFunc(k.Value, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return fmt.Errorf("api-keys[%d].value: must not contain whitespace or control characters", i)
+		}
+		if len(k.Name) > MaxAPIKeyNameLength || strings.IndexFunc(k.Name, unicode.IsControl) >= 0 {
+			return fmt.Errorf("api-keys[%d].name: must be at most %d bytes without control characters", i, MaxAPIKeyNameLength)
+		}
+	}
+	seen := make(map[string]bool, len(c.APIKeys))
+	for _, k := range c.APIKeys {
+		if seen[k.Value] {
+			return fmt.Errorf("api-keys: duplicate key values are not allowed")
+		}
+		seen[k.Value] = true
+	}
+	if c.Catalog.RefreshInterval < time.Minute {
+		return fmt.Errorf("catalog.refresh-interval: must be at least 1m")
+	}
+	if c.MaxResponseBytes <= 0 {
+		return fmt.Errorf("max-response-bytes: must be positive")
+	}
+	if c.ModelPrefix.Enabled && !validPrefix(c.ModelPrefix.Value) {
+		return fmt.Errorf("model-prefix.value: invalid provider-ID characters %q", c.ModelPrefix.Value)
+	}
+	return nil
+}
+
+func validateURL(name, raw string, allowHTTP bool) error {
+	if raw == "" {
+		return fmt.Errorf("%s: must not be empty", name)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%s: invalid URL", name)
+	}
+	if u.Scheme == "" || u.Host == "" || u.Hostname() == "" {
+		// Echo only scheme://host — the configured string may embed
+		// userinfo credentials (https://user:key@host).
+		return fmt.Errorf("%s: invalid URL %s://%s", name, u.Scheme, u.Host)
+	}
+	// ForceQuery catches a bare trailing "?": JoinUpstreamURL concatenates
+	// strings, so the endpoint path would land inside the query.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.User != nil {
+		return fmt.Errorf("%s: must not contain query, fragment, or userinfo", name)
+	}
+	// RawPath is set only when the path uses non-canonical percent-encoding;
+	// reject it so the configured path is unambiguous.
+	if u.RawPath != "" {
+		return fmt.Errorf("%s: path must not use non-canonical percent-encoding", name)
+	}
+	// Scheme allowlist: https always; http only behind
+	// allow-http; anything else (ftp://, file://, custom schemes) is
+	// rejected at load instead of failing at transport time.
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !allowHTTP {
+			return fmt.Errorf("%s: http scheme requires allow-http", name)
+		}
+	default:
+		return fmt.Errorf("%s: unsupported scheme %q; use https", name, u.Scheme)
+	}
+	return nil
+}
+
+func validPrefix(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		alnum := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+		if i == 0 && !alnum {
+			return false
+		}
+		if !alnum && r != '.' && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseDuration(name string, p *string, def time.Duration) (time.Duration, error) {
+	if p == nil {
+		return def, nil
+	}
+	d, err := time.ParseDuration(*p)
+	if err != nil {
+		return 0, fmt.Errorf("%s: invalid duration", name)
+	}
+	return d, nil
+}
+
+func orDefault[T any](p *T, def T) T {
+	if p != nil {
+		return *p
+	}
+	return def
 }

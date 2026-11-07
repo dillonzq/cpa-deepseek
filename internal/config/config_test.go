@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,10 +13,10 @@ func TestNewConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BaseURL != "https://api.deepseek.com" || c.Credentials[0].Value != "secret-value" || c.RequestTimeout != 15*time.Minute || c.QuotaTimeout != 15*time.Second || PublicID(c, "deepseek-flash") != "deepseek/deepseek-flash" {
+	if c.BaseURL != "https://api.deepseek.com" || c.APIKeys[0].Value != "secret-value" || c.RequestTimeout != 15*time.Minute || c.QuotaTimeout != 15*time.Second || PublicID(c, "deepseek-flash") != "deepseek/deepseek-flash" {
 		t.Fatalf("wrong defaults: %+v", c)
 	}
-	if c.HasCredential("removed-key") || !c.HasCredential("secret-value") {
+	if c.HasAPIKey("removed-key") || !c.HasAPIKey("secret-value") {
 		t.Fatal("credential membership is wrong")
 	}
 }
@@ -30,11 +31,19 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 		base + "base-url: http://example.test\n", base + "base-url: https://example.test?key=sensitive-secret-123\n",
 		base + "base-url: file:///tmp/key\n", base + "quota: {timeout: 0s}\n", base + "quota: {timeout: 2m}\n",
 		base + "request-timeout: -1s\n", base + "catalog: {refresh-interval: 1s}\n", base + "max-response-bytes: 0\n",
-		base + "model-prefix: {value: ../invalid}\n", base + "models: [{name: bad(id)}]\n",
+		base + "model-prefix: {value: ../invalid}\n", base + "models: [{name: ' '}]\n",
 		base + "models: [{name: a, alias: x}, {name: b, alias: x}]\n", base + "models: [{name: a, alias: ' x'}]\n",
 		"api-keys:\n  - value: sensitive-secret-123\n  - value: sensitive-secret-123\n",
 		"api-keys:\n  - value: ${DEEPSEEK_MISSING_TEST_ENV}\n",
-		"api-keys:\n  - value: 'sensitive-secret-123 space'\n",
+		"api-keys:\n  - value: \"sensitive-secret-123\\nsecond-line\"\n",
+		base + "base-url: https://:443\n", base + "base-url: https://api.example.test?\n",
+		base + "base-url: https://api.example.test/a%2fb\n",
+		"api-keys:\n  - value: \"sensitive-secret-123\\tx\"\n",
+		"api-keys:\n  - value: \"sensitive-secret-123\\u0000x\"\n",
+		"api-keys:\n  - value: sensitive-secret-123" + strings.Repeat("x", MaxAPIKeyLength) + "\n",
+		"api-keys:\n  - {value: sensitive-secret-123, name: \"a\\u0007b\"}\n",
+		"api-keys:\n  - {value: sensitive-secret-123, name: " + strings.Repeat("n", MaxAPIKeyNameLength+1) + "}\n",
+		tooManyKeys(),
 	} {
 		t.Run(tc, func(t *testing.T) {
 			_, err := Load([]byte(tc))
@@ -45,6 +54,28 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 				t.Fatal("error leaked credential")
 			}
 		})
+	}
+}
+
+func tooManyKeys() string {
+	var b strings.Builder
+	b.WriteString("api-keys:\n")
+	for i := 0; i <= MaxAPIKeys; i++ {
+		fmt.Fprintf(&b, "  - value: sensitive-secret-%d\n", i)
+	}
+	return b.String()
+}
+
+func TestRejectExtraYAMLDocument(t *testing.T) {
+	base := "api-keys: [{value: sensitive-secret-123}]\n"
+	for _, tc := range []struct{ yaml, want string }{
+		{base + "---\napi-keys: []\n", "expected one YAML document"},
+		{base + "---\n[sensitive-secret-123\n", "invalid YAML structure near line"},
+	} {
+		_, err := Load([]byte(tc.yaml))
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "sensitive-secret") {
+			t.Fatalf("Load(%q) error = %v, want %q", tc.yaml, err, tc.want)
+		}
 	}
 }
 
