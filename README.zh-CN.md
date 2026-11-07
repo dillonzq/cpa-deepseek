@@ -197,7 +197,7 @@ DeepSeek [Responses API](https://api-docs.deepseek.com/zh-cn/guides/responses_ap
 
 ## 凭证、quota 与冷却
 
-每个 key 对应独立 CPA 凭证，ID 和文件名基于 key 的 SHA-256，因此改名或调整顺序不会改变身份。`name` 在凭证解析或刷新时作为显示标签。配置重载保留已有凭证存储和宿主状态，包括代理与禁用设置。
+每个 key 对应独立 CPA 凭证，ID 基于 key 的 SHA-256，因此改名或调整顺序不会改变身份；文件名在创建凭证时取自 `name`（见上文“多凭证配置”）。`name` 在凭证解析或刷新时作为显示标签。配置重载保留已有凭证存储和宿主状态，包括代理与禁用设置。
 
 从配置移除 key 后，该 key 无法继续执行、查询 quota、刷新或发布对应凭证的模型；实体凭证文件仍由 CPA 管理，可在凭证管理中删除。执行、quota 查询和刷新均使用 **CPA 当前选中的 key**，quota 查询失败不会改用其他账户代查。
 

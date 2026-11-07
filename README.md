@@ -197,7 +197,7 @@ The plugin handles non-streaming whitespace and SSE keep-alive comments, and use
 
 ## Credentials, quotas and cooldowns
 
-Each key is materialized as a separate CPA credential. IDs and filenames use the key's SHA-256 digest, so renaming or reordering entries does not change identity. `name` is the display label applied when the credential is parsed or refreshed. Configuration reload preserves existing credential storage and host-managed state, including proxy and disabled settings.
+Each key is materialized as a separate CPA credential. IDs use the key's SHA-256 digest, so renaming or reordering entries does not change identity; filenames come from `name` when the credential is created (see [Multiple credentials](#multiple-credentials)). `name` is the display label applied when the credential is parsed or refreshed. Configuration reload preserves existing credential storage and host-managed state, including proxy and disabled settings.
 
 Removing a key from configuration prevents its execution, quota lookup, refresh and per-auth model publication. Its physical credential file remains under CPA management and can be deleted there. Each execution, quota fetch and refresh uses the **selected key**; a failed quota lookup never falls back to another account.
 
