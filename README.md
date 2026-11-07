@@ -55,7 +55,8 @@ Choose the operating system and architecture **running CPA**, including its cont
 | --- | --- | --- |
 | Linux | amd64 / arm64 | `cpa-deepseek.so` |
 | macOS | amd64 / arm64 | `cpa-deepseek.dylib` |
-| Windows | amd64 | `cpa-deepseek.dll` |
+| Windows | amd64 / arm64 | `cpa-deepseek.dll` |
+| FreeBSD | amd64 | `cpa-deepseek.so` |
 
 1. Extract the artifact and put the matching library in CPA's plugin directory, for example `plugins/cpa-deepseek.so` on Linux. Keep `LICENSE` and the asset source notes with redistributed packages.
 2. Add the [minimal configuration](#minimal-configuration) and set `DEEPSEEK_API_KEY` in the **CPA process environment**.
@@ -277,7 +278,7 @@ CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.so .
 
 On macOS, use `dist/cpa-deepseek.dylib`. On Windows, run `go build -trimpath -buildmode=c-shared -o dist/cpa-deepseek.dll .` with `CGO_ENABLED=1` and an available C compiler.
 
-Version metadata defaults to `0.0.0-dev`. Inject a version with `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'`, or run `bash scripts/package.sh v0.1.0` (requires Python 3) to build `dist/cpa-deepseek_0.1.0_<goos>_<goarch>.zip` for the current Go target, with the dynamic library at the ZIP root. CI defines Linux/macOS amd64 and arm64 builds, plus Windows amd64. Build artifacts include both READMEs, the sample configuration, license and icon source notes. Branch and pull request packages use `0.0.0`; tag builds prepare a draft GitHub Release with all five ZIPs and SHA-256 entries in `checksums.txt`; see [the release procedure](RELEASE.md).
+Version metadata defaults to `0.0.0-dev`. Inject a version with `-ldflags '-X github.com/dillonzq/cpa-deepseek/internal/plugin.pluginVersion=0.1.0'`, or run `bash scripts/package.sh v0.1.0` (requires Python 3) to build `dist/cpa-deepseek_0.1.0_<goos>_<goarch>.zip` for the current Go target, with the dynamic library at the ZIP root. CI defines Linux/macOS/Windows amd64 and arm64 builds, plus FreeBSD amd64; Windows arm64 and FreeBSD are cross-compiled on Linux. Build artifacts include both READMEs, the sample configuration, license and icon source notes. Branch and pull request packages use `0.0.0`; tag builds prepare a draft GitHub Release with all seven ZIPs and SHA-256 entries in `checksums.txt`; see [the release procedure](RELEASE.md).
 
 ## Testing
 
