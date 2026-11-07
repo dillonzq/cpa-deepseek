@@ -68,7 +68,7 @@ func (authProvider) PollLogin(context.Context, pluginapi.AuthLoginPollRequest) (
 // the balance endpoint first, then uses this method to preserve host state.
 func (p authProvider) RefreshAuth(_ context.Context, req pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {
 	key := strings.TrimSpace(req.Attributes["api_key"])
-	if req.AuthProvider != ProviderID || key == "" || !p.cfg.HasCredential(key) {
+	if req.AuthProvider != ProviderID || key == "" || !p.cfg.HasAPIKey(key) {
 		return pluginapi.AuthRefreshResponse{}, fmt.Errorf("selected DeepSeek credential is unavailable")
 	}
 	var stored authRecord
@@ -89,7 +89,7 @@ func (m *Manager) refreshAuth(ctx context.Context, req pluginapi.AuthRefreshRequ
 	cfg := m.cfg
 	m.mu.RUnlock()
 	key := strings.TrimSpace(req.Attributes["api_key"])
-	if req.AuthProvider != ProviderID || !cfg.HasCredential(key) {
+	if req.AuthProvider != ProviderID || !cfg.HasAPIKey(key) {
 		return pluginapi.AuthRefreshResponse{}, authFailure()
 	}
 	balance, err := m.fetchBalance(ctx, cfg, key)
@@ -111,7 +111,7 @@ func credentialID(key string) string {
 	return "deepseek-key-" + hex.EncodeToString(digest[:])
 }
 func accountLabel(cfg config.Config, key, stored string) string {
-	for _, credential := range cfg.Credentials {
+	for _, credential := range cfg.APIKeys {
 		if credential.Value == key && credential.Name != "" {
 			return credential.Name
 		}

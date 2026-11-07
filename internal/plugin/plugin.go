@@ -78,7 +78,7 @@ func (m *Manager) HandleCall(method string, data []byte) (response []byte, err e
 			return ErrEnvelope("invalid_request", "invalid model request"), nil
 		}
 		m.mu.RLock()
-		active := m.cfg.HasCredential(strings.TrimSpace(req.Attributes["api_key"]))
+		active := m.cfg.HasAPIKey(strings.TrimSpace(req.Attributes["api_key"]))
 		m.mu.RUnlock()
 		return m.handleModels(req.AuthProvider == ProviderID && active)
 	case pluginabi.MethodAuthParse:
@@ -239,7 +239,7 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	for _, entry := range entries {
 		existing[entry.Name], existing[entry.ID] = true, true
 	}
-	for _, key := range cfg.Credentials {
+	for _, key := range cfg.APIKeys {
 		id := credentialID(key.Value)
 		name := id + ".json"
 		if existing[id] || existing[name] {

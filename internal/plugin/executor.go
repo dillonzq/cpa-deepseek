@@ -62,7 +62,7 @@ func (m *Manager) resolveExecution(req executorRequest) (*resolvedExecution, []b
 	if key == "" {
 		return nil, classEnvelope(&errclass.Error{Class: errclass.ClassAuth, Message: "selected auth has no api key", StatusCode: http.StatusUnauthorized})
 	}
-	if !cfg.HasCredential(key) {
+	if !cfg.HasAPIKey(key) {
 		return nil, classEnvelope(&errclass.Error{Class: errclass.ClassAuth, Message: "selected credential is not configured", StatusCode: http.StatusUnauthorized})
 	}
 	// CPA parses a model-name thinking suffix (model(high)) for its own
