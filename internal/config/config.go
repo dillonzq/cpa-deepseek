@@ -20,12 +20,14 @@ import (
 
 // Defaults.
 const (
-	DefaultBaseURL          = "https://api.deepseek.com"
-	DefaultQuotaTimeout     = 15 * time.Second
-	DefaultModelPrefix      = "deepseek"
-	DefaultRefreshInterval  = 15 * time.Minute
-	DefaultRequestTimeout   = 15 * time.Minute
-	DefaultMaxResponseBytes = int64(67108864) // 64 MiB
+	DefaultBaseURL           = "https://api.deepseek.com"
+	DefaultQuotaTimeout      = 15 * time.Second
+	DefaultModelPrefix       = "deepseek"
+	DefaultRefreshInterval   = 15 * time.Minute
+	DefaultRequestTimeout    = 5 * time.Minute
+	DefaultStreamIdleTimeout = 5 * time.Minute
+	DefaultMaxStreamDuration = time.Hour
+	DefaultMaxResponseBytes  = int64(67108864) // 64 MiB
 )
 
 // API key limits.
@@ -62,15 +64,22 @@ type Catalog struct {
 }
 
 type Config struct {
-	Models           []ModelOverride
-	BaseURL          string
-	QuotaTimeout     time.Duration
-	ModelPrefix      ModelPrefix
-	APIKeys          []APIKey
-	Catalog          Catalog
-	AllowHTTP        bool
-	RequestTimeout   time.Duration
-	MaxResponseBytes int64
+	Models       []ModelOverride
+	BaseURL      string
+	QuotaTimeout time.Duration
+	ModelPrefix  ModelPrefix
+	APIKeys      []APIKey
+	Catalog      Catalog
+	AllowHTTP    bool
+	// RequestTimeout bounds a whole non-streaming request, or only the
+	// opening of a stream.
+	RequestTimeout time.Duration
+	// StreamIdleTimeout bounds the silence between upstream stream chunks;
+	// each chunk restarts it.
+	StreamIdleTimeout time.Duration
+	// MaxStreamDuration bounds one stream's whole lifetime, opening included.
+	MaxStreamDuration time.Duration
+	MaxResponseBytes  int64
 }
 
 type ModelOverride struct {
@@ -93,12 +102,14 @@ type rawConfig struct {
 	Quota    struct {
 		Timeout *string `yaml:"timeout"`
 	} `yaml:"quota"`
-	ModelPrefix      rawPrefix   `yaml:"model-prefix"`
-	APIKeys          []rawAPIKey `yaml:"api-keys"`
-	Catalog          rawCatalog  `yaml:"catalog"`
-	AllowHTTP        bool        `yaml:"allow-http"`
-	RequestTimeout   *string     `yaml:"request-timeout"`
-	MaxResponseBytes *int64      `yaml:"max-response-bytes"`
+	ModelPrefix       rawPrefix   `yaml:"model-prefix"`
+	APIKeys           []rawAPIKey `yaml:"api-keys"`
+	Catalog           rawCatalog  `yaml:"catalog"`
+	AllowHTTP         bool        `yaml:"allow-http"`
+	RequestTimeout    *string     `yaml:"request-timeout"`
+	StreamIdleTimeout *string     `yaml:"stream-idle-timeout"`
+	MaxStreamDuration *string     `yaml:"max-stream-duration"`
+	MaxResponseBytes  *int64      `yaml:"max-response-bytes"`
 }
 
 type rawPrefix struct {
@@ -142,12 +153,17 @@ func Load(yamlBytes []byte) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	requestTimeout, err := parseDuration("request-timeout", raw.RequestTimeout, DefaultRequestTimeout)
+	requestTimeout, err := parsePositiveDuration("request-timeout", raw.RequestTimeout, DefaultRequestTimeout)
 	if err != nil {
 		return Config{}, err
 	}
-	if requestTimeout <= 0 {
-		return Config{}, fmt.Errorf("request-timeout: must be positive")
+	streamIdle, err := parsePositiveDuration("stream-idle-timeout", raw.StreamIdleTimeout, DefaultStreamIdleTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+	maxStream, err := parsePositiveDuration("max-stream-duration", raw.MaxStreamDuration, DefaultMaxStreamDuration)
+	if err != nil {
+		return Config{}, err
 	}
 	quotaTimeout, err := parseDuration("quota.timeout", raw.Quota.Timeout, DefaultQuotaTimeout)
 	if err != nil {
@@ -169,9 +185,11 @@ func Load(yamlBytes []byte) (Config, error) {
 			RefreshInterval:       refreshInterval,
 			StaleWhileUnavailable: orDefault(raw.Catalog.StaleWhileUnavailable, true),
 		},
-		AllowHTTP:        raw.AllowHTTP,
-		RequestTimeout:   requestTimeout,
-		MaxResponseBytes: orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
+		AllowHTTP:         raw.AllowHTTP,
+		RequestTimeout:    requestTimeout,
+		StreamIdleTimeout: streamIdle,
+		MaxStreamDuration: maxStream,
+		MaxResponseBytes:  orDefault(raw.MaxResponseBytes, DefaultMaxResponseBytes),
 	}
 	if err := c.validate(); err != nil {
 		return Config{}, err
@@ -325,6 +343,17 @@ func parseDuration(name string, p *string, def time.Duration) (time.Duration, er
 	d, err := time.ParseDuration(*p)
 	if err != nil {
 		return 0, fmt.Errorf("%s: invalid duration", name)
+	}
+	return d, nil
+}
+
+func parsePositiveDuration(name string, p *string, def time.Duration) (time.Duration, error) {
+	d, err := parseDuration(name, p, def)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%s: must be positive", name)
 	}
 	return d, nil
 }

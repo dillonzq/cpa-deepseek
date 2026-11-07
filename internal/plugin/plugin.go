@@ -166,7 +166,9 @@ func registrationEnvelope() []byte {
 			{Name: "model-prefix", Type: pluginapi.ConfigFieldTypeObject, Description: "enabled (default true), value (default deepseek)."},
 			{Name: "catalog", Type: pluginapi.ConfigFieldTypeObject, Description: "refresh-interval (15m), stale-while-unavailable (true)."},
 			{Name: "quota", Type: pluginapi.ConfigFieldTypeObject, Description: "timeout (15s, maximum 1m). Fetches fresh balance for the selected credential."},
-			{Name: "request-timeout", Type: pluginapi.ConfigFieldTypeString, Description: "Total upstream request timeout, including streaming (15m)."},
+			{Name: "request-timeout", Type: pluginapi.ConfigFieldTypeString, Description: "Upstream request timeout: a whole non-streaming request, or opening a stream (5m)."},
+			{Name: "stream-idle-timeout", Type: pluginapi.ConfigFieldTypeString, Description: "Max silence between upstream stream chunks; each chunk restarts it (5m)."},
+			{Name: "max-stream-duration", Type: pluginapi.ConfigFieldTypeString, Description: "Max lifetime of one stream, opening included (1h)."},
 			{Name: "max-response-bytes", Type: pluginapi.ConfigFieldTypeInteger, Description: "Maximum response/stream size (67108864)."},
 			{Name: "allow-http", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Allow HTTP for local test servers (false)."},
 		}}, capabilities{true, true, true, pluginapi.ExecutorModelScopeOAuth, formats, formats, true}})

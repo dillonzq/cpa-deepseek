@@ -13,7 +13,7 @@ func TestNewConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BaseURL != "https://api.deepseek.com" || c.APIKeys[0].Value != "secret-value" || c.RequestTimeout != 15*time.Minute || c.QuotaTimeout != 15*time.Second || PublicID(c, "deepseek-flash") != "deepseek/deepseek-flash" {
+	if c.BaseURL != "https://api.deepseek.com" || c.APIKeys[0].Value != "secret-value" || c.RequestTimeout != 5*time.Minute || c.StreamIdleTimeout != 5*time.Minute || c.MaxStreamDuration != time.Hour || c.QuotaTimeout != 15*time.Second || PublicID(c, "deepseek-flash") != "deepseek/deepseek-flash" {
 		t.Fatalf("wrong defaults: %+v", c)
 	}
 	if c.HasAPIKey("removed-key") || !c.HasAPIKey("secret-value") {
@@ -30,7 +30,9 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 		base + "---\napi-keys: []", base + "base-url: https://user:sensitive-secret-123@example.test\n",
 		base + "base-url: http://example.test\n", base + "base-url: https://example.test?key=sensitive-secret-123\n",
 		base + "base-url: file:///tmp/key\n", base + "quota: {timeout: 0s}\n", base + "quota: {timeout: 2m}\n",
-		base + "request-timeout: -1s\n", base + "catalog: {refresh-interval: 1s}\n", base + "max-response-bytes: 0\n",
+		base + "request-timeout: -1s\n", base + "request-timeout: 0s\n", base + "stream-idle-timeout: 0s\n", base + "stream-idle-timeout: -1s\n",
+		base + "stream-idle-timeout: bogus\n", base + "max-stream-duration: 0s\n", base + "max-stream-duration: -1m\n", base + "max-stream-duration: 5\n",
+		base + "catalog: {refresh-interval: 1s}\n", base + "max-response-bytes: 0\n",
 		base + "model-prefix: {value: ../invalid}\n", base + "models: [{name: ' '}]\n",
 		base + "models: [{name: a, alias: x}, {name: b, alias: x}]\n", base + "models: [{name: a, alias: ' x'}]\n",
 		"api-keys:\n  - value: sensitive-secret-123\n  - value: sensitive-secret-123\n",
@@ -96,5 +98,15 @@ func TestModelAlias(t *testing.T) {
 	}
 	if c.Models[0].Alias != "flash" || c.Models[1].Alias != "" {
 		t.Fatalf("aliases = %q, %q", c.Models[0].Alias, c.Models[1].Alias)
+	}
+}
+
+func TestStreamTimeoutSettings(t *testing.T) {
+	c, err := Load([]byte("api-keys: [{value: key}]\nrequest-timeout: 30s\nstream-idle-timeout: 90s\nmax-stream-duration: 2h\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.RequestTimeout != 30*time.Second || c.StreamIdleTimeout != 90*time.Second || c.MaxStreamDuration != 2*time.Hour {
+		t.Fatalf("stream timeouts = %v/%v/%v", c.RequestTimeout, c.StreamIdleTimeout, c.MaxStreamDuration)
 	}
 }

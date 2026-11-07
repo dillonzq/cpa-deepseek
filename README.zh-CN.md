@@ -39,7 +39,7 @@
 - **多组命名凭证**：根据 key 生成稳定身份，严格使用选中凭证执行，各协议共用 CPA 调度状态。
 - **CPA v8 原生 quota**：实时查询选中凭证的账户余额，分别显示 CNY/USD 金额与账户可用状态。
 - **定向冷却恢复**：充值或临时故障恢复后，通过 CPA 原生接口解除指定凭证的冷却。
-- **可取消 HTTP**：通过 CPA 宿主 HTTP operation 发出请求，客户端断开、超时和插件卸载会取消上游工作并释放流。
+- **可取消 HTTP**：通过 CPA 宿主 HTTP operation 发出请求，客户端断开、超时和插件卸载会取消上游工作并释放流。持续收到数据的流不会因 `request-timeout` 被切断；连续静默达到 `stream-idle-timeout` 或总时长达到 `max-stream-duration` 时结束，下游错误会注明触发的限制。
 
 ## 环境要求
 
@@ -120,7 +120,9 @@ api-keys:
 | `catalog.stale-while-unavailable` | `true` | 发现失败时保留最近成功的快照 |
 | `models` | 空 | 模型声明、别名及元数据覆盖 |
 | `quota.timeout` | `15s` | 余额查询或凭证验证超时，最多 `1m` |
-| `request-timeout` | `15m` | 上游请求总超时，包含流式读取 |
+| `request-timeout` | `5m` | 完整非流式请求的超时，或流式请求建立连接（收到上游状态码前；状态码非 200 时也包括读取错误体）的超时；不限制已建立的流 |
+| `stream-idle-timeout` | `5m` | 流建立后两个上游数据块之间的最长静默，每收到一块重新计时，向下游投递的耗时不计入 |
+| `max-stream-duration` | `1h` | 单个流的最长时长，从开始建立算起，不论是否活跃 |
 | `max-response-bytes` | `67108864` | 接受的普通响应大小或流累计大小，64 MiB |
 | `allow-http` | `false` | 本地测试服务器需要 HTTP 时显式开启 |
 
