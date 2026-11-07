@@ -34,7 +34,7 @@ The plugin ID is `cpa-deepseek`. The provider ID, credential type and default mo
 ## Features
 
 - **Official model discovery.** Read models, context/output limits, modalities and reasoning levels from DeepSeek's `/models` endpoint; add explicit metadata overrides when needed.
-- **Four client protocols.** Native Chat Completions, Responses and Anthropic Messages, plus Gemini GenerateContent through [apix](https://github.com/dillonzq/apix/tree/v0.2.0), with ordinary and streaming requests.
+- **Four client protocols.** Native Chat Completions, Responses and Anthropic Messages, plus Gemini GenerateContent through [apix](https://github.com/dillonzq/apix/tree/v0.4.0), with ordinary and streaming requests.
 - **Tools and reasoning.** Preserve native tool definitions, tool results, `reasoning_content`, supported image inputs and protocol-specific extensions. Apply DeepSeek thinking controls and CPA model-name suffixes.
 - **Multiple named credentials.** Stable key-derived identities, selected-key execution and a shared CPA scheduler across protocols.
 - **Native CPA v8 quotas.** Fetch fresh account balances for the selected credential, with separate CNY/USD currency summaries and account availability.
