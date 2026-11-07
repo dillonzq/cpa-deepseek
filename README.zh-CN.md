@@ -34,7 +34,7 @@
 ## 功能
 
 - **官方模型发现**：从 DeepSeek `/models` 接口读取模型、上下文和输出上限、模态与推理级别，支持显式覆盖元数据。
-- **四种客户端协议**：原生支持 Chat Completions、Responses、Anthropic Messages，通过 [apix](https://github.com/dillonzq/apix/tree/v0.2.0) 转换 Gemini GenerateContent；均支持普通和流式请求。
+- **四种客户端协议**：原生支持 Chat Completions、Responses、Anthropic Messages，通过 [apix](https://github.com/dillonzq/apix/tree/v0.4.0) 转换 Google GenerateContent；均支持普通和流式请求。
 - **工具与推理**：保留原生工具定义、工具结果、`reasoning_content`、模型支持的图片输入及协议扩展字段，处理 DeepSeek thinking 控制和 CPA 模型名后缀。
 - **多组命名凭证**：根据 key 生成稳定身份，严格使用选中凭证执行，各协议共用 CPA 调度状态。
 - **CPA v8 原生 quota**：实时查询选中凭证的账户余额，分别显示 CNY/USD 金额与账户可用状态。
@@ -170,7 +170,7 @@ models:
 | OpenAI Chat Completions | `/chat/completions` | 原生 |
 | OpenAI Responses | `/responses` | 原生 |
 | Anthropic Messages | `/anthropic/v1/messages` | 原生 |
-| Gemini GenerateContent | `/chat/completions` | 转换请求、响应和流 |
+| Google GenerateContent | `/chat/completions` | 转换请求、响应和流 |
 
 原生请求保留各 API 专有字段及扩展字段；跨协议转换遇到无法表达的能力时返回明确错误。图片支持取决于选中的模型和协议。当前未实现独立 Files、Search、Fetch 端点代理和 token 计数操作；原生推理请求中支持的服务端工具字段会保留。
 
