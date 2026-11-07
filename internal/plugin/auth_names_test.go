@@ -1,10 +1,14 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dillonzq/cpa-deepseek/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -55,5 +59,39 @@ func TestMaterializedAuthUsesReadableFilename(t *testing.T) {
 		if !strings.HasPrefix(record.ID, "deepseek-key-") {
 			t.Fatalf("identity changed: %q", record.ID)
 		}
+	}
+}
+
+// Before the auth manager is ready, v8 lists disk files without IDs; a
+// readable filename must still be matched to its key to avoid duplicates.
+func TestMaterializeRecoversIdentityFromDiskListing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Personal.json")
+	if err := os.WriteFile(path, []byte(`{"type":"deepseek","id":"deepseek-key-x","label":"Personal","api_key":"key-a"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{Name: "Personal.json", Type: ProviderID, Provider: ProviderID, Source: "file", Path: path},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "Personal", Value: "key-a"}, {Name: "Personal", Value: "key-b"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 1 {
+		t.Fatalf("auth saves=%d, want 1 (only key-b)", len(saves))
+	}
+	var req pluginapi.HostAuthSaveRequest
+	if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Name != "Personal-2.json" || !strings.Contains(string(req.JSON), credentialID("key-b")) {
+		t.Fatalf("saved %q with wrong record", req.Name)
 	}
 }

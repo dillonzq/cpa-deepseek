@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -239,6 +241,14 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	existing := map[string]bool{}
 	for _, entry := range entries {
 		existing[entry.Name], existing[entry.ID] = true, true
+		// Before the auth manager is ready, v8 lists disk files without IDs.
+		// Readable filenames no longer encode identity, so recover it from the
+		// record itself; an unreadable record at worst yields one duplicate.
+		if (entry.Provider == ProviderID || entry.Type == ProviderID) && !strings.HasPrefix(entry.ID, "deepseek-key-") {
+			if key := readAuthRecordKey(entry.Path); key != "" {
+				existing[credentialID(key)] = true
+			}
+		}
 	}
 	for _, key := range cfg.APIKeys {
 		id := credentialID(key.Value)
@@ -254,6 +264,25 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		existing[id], existing[name] = true, true
 	}
 	return nil
+}
+
+// readAuthRecordKey reads the api_key of a host-reported auth file. It is
+// only used for identity; the key never reaches logs or errors.
+func readAuthRecordKey(path string) string {
+	if !filepath.IsAbs(path) {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var record struct {
+		APIKey string `json:"api_key"`
+	}
+	if json.Unmarshal(raw, &record) != nil {
+		return ""
+	}
+	return strings.TrimSpace(record.APIKey)
 }
 
 // availableAuthName derives a readable, unused credential filename from the
