@@ -37,27 +37,40 @@ func TestAvailableAuthName(t *testing.T) {
 }
 
 func TestMaterializedAuthUsesReadableFilename(t *testing.T) {
-	_, f := newFixture(t, nil)
-	saves := f.callsOf(pluginabi.MethodHostAuthSave)
-	if len(saves) == 0 {
-		t.Fatal("no credentials materialized")
+	dir := t.TempDir()
+	listed := filepath.Join(dir, "other.json")
+	if err := os.WriteFile(listed, []byte(`{"type":"codex"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	for _, call := range saves {
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{ID: "other.json", Name: "other.json", Type: "codex", Provider: "codex", Source: "memory", Path: listed},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "dillonzq@outlook.com", Value: "key-a"}, {Value: "key-b"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	want := []string{"dillonzq-outlook-com.json", "DeepSeek-" + strings.TrimPrefix(credentialID("key-b"), "deepseek-key-")[:8] + ".json"}
+	if len(saves) != len(want) {
+		t.Fatalf("auth saves=%d, want %d", len(saves), len(want))
+	}
+	for i, call := range saves {
 		var req pluginapi.HostAuthSaveRequest
 		if err := json.Unmarshal(call.payload, &req); err != nil {
 			t.Fatal(err)
 		}
-		var record struct {
-			ID, Label string
-		}
+		var record struct{ ID string }
 		if err := json.Unmarshal(req.JSON, &record); err != nil {
 			t.Fatal(err)
 		}
-		if strings.HasPrefix(req.Name, "deepseek-key-") || req.Name != availableAuthName(record.Label, nil) {
-			t.Fatalf("filename=%q for label %q", req.Name, record.Label)
-		}
-		if !strings.HasPrefix(record.ID, "deepseek-key-") {
-			t.Fatalf("identity changed: %q", record.ID)
+		if req.Name != want[i] || record.ID != credentialID(cfg.APIKeys[i].Value) {
+			t.Fatalf("saved %q id %q, want %q", req.Name, record.ID, want[i])
 		}
 	}
 }
@@ -129,5 +142,32 @@ func TestMaterializeSkipsUnlistedFiles(t *testing.T) {
 	}
 	if req.Name != "Team-2.json" {
 		t.Fatalf("saved name=%q, want Team-2.json", req.Name)
+	}
+}
+
+// With no listed absolute path the auth directory cannot be checked, so a
+// readable name could overwrite an unlisted file; use the key-derived name.
+func TestMaterializeFallsBackWithoutAuthDir(t *testing.T) {
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "Team", Value: "key-a"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 1 {
+		t.Fatalf("auth saves=%d, want 1", len(saves))
+	}
+	var req pluginapi.HostAuthSaveRequest
+	if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	if want := credentialID("key-a") + ".json"; req.Name != want {
+		t.Fatalf("saved name=%q, want %q", req.Name, want)
 	}
 }

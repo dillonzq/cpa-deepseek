@@ -261,12 +261,17 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 			continue
 		}
 		label := accountLabel(cfg, key.Value, "")
-		name := availableAuthName(label, existing)
 		// AuthSave overwrites, and AuthList can omit files the auth manager did
 		// not load (e.g. invalid JSON), so never pick a name already on disk.
-		for authDir != "" && fileExists(filepath.Join(authDir, name)) {
-			existing[name] = true
+		// Without a listed path the directory cannot be checked; fall back to
+		// the key-derived name, which only this key's record can occupy.
+		name := id + ".json"
+		if authDir != "" {
 			name = availableAuthName(label, existing)
+			for fileExists(filepath.Join(authDir, name)) {
+				existing[name] = true
+				name = availableAuthName(label, existing)
+			}
 		}
 		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": label, "api_key": key.Value})
 		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{Name: name, JSON: record}); err != nil {
