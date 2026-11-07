@@ -239,9 +239,14 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		return err
 	}
 	existing := map[string]bool{}
+	authDir := ""
 	for _, entry := range entries {
 		existing[entry.Name], existing[entry.ID] = true, true
-		// Before the auth manager is ready, v8 lists disk files without IDs.
+		if authDir == "" && filepath.IsAbs(entry.Path) {
+			authDir = filepath.Dir(entry.Path)
+		}
+		// v8 lists disk files without IDs before the auth manager is ready, and
+		// identifies host-saved files by path rather than the record's id.
 		// Readable filenames no longer encode identity, so recover it from the
 		// record itself; an unreadable record at worst yields one duplicate.
 		if (entry.Provider == ProviderID || entry.Type == ProviderID) && !strings.HasPrefix(entry.ID, "deepseek-key-") {
@@ -257,6 +262,12 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		}
 		label := accountLabel(cfg, key.Value, "")
 		name := availableAuthName(label, existing)
+		// AuthSave overwrites, and AuthList can omit files the auth manager did
+		// not load (e.g. invalid JSON), so never pick a name already on disk.
+		for authDir != "" && fileExists(filepath.Join(authDir, name)) {
+			existing[name] = true
+			name = availableAuthName(label, existing)
+		}
 		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": label, "api_key": key.Value})
 		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{Name: name, JSON: record}); err != nil {
 			return err
@@ -283,6 +294,11 @@ func readAuthRecordKey(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(record.APIKey)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
 
 // availableAuthName derives a readable, unused credential filename from the

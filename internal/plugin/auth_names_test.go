@@ -95,3 +95,39 @@ func TestMaterializeRecoversIdentityFromDiskListing(t *testing.T) {
 		t.Fatalf("saved %q with wrong record", req.Name)
 	}
 }
+
+// AuthList can omit files the auth manager did not load; AuthSave overwrites,
+// so a readable name must not land on an unlisted file in the auth directory.
+func TestMaterializeSkipsUnlistedFiles(t *testing.T) {
+	dir := t.TempDir()
+	listed := filepath.Join(dir, "other.json")
+	for path, body := range map[string]string{listed: `{"type":"codex"}`, filepath.Join(dir, "Team.json"): `not json`} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{ID: "other.json", Name: "other.json", Type: "codex", Provider: "codex", Source: "memory", Path: listed},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "Team", Value: "key-a"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 1 {
+		t.Fatalf("auth saves=%d, want 1", len(saves))
+	}
+	var req pluginapi.HostAuthSaveRequest
+	if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Name != "Team-2.json" {
+		t.Fatalf("saved name=%q, want Team-2.json", req.Name)
+	}
+}
