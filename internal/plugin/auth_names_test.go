@@ -171,3 +171,180 @@ func TestMaterializeFallsBackWithoutAuthDir(t *testing.T) {
 		t.Fatalf("saved name=%q, want %q", req.Name, want)
 	}
 }
+
+func TestMaterializeMatchesKeyBehindHostFilenameID(t *testing.T) {
+	for _, tc := range []struct{ name, provider string }{
+		{"Personal.json", ProviderID},
+		{"deepseek-key-Personal.json", ProviderID},
+		{"deepseek-key-" + strings.Repeat("a", 59) + ".json", ProviderID},
+		{credentialID("key-a") + ".json", ProviderID},
+		{"ProviderMissing.json", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			name := tc.name
+			path := filepath.Join(t.TempDir(), name)
+			original := []byte(`{"type":"deepseek","api_key":"key-a","disabled":true,"proxy_url":"http://localhost:9999","custom":"keep"}`)
+			if err := os.WriteFile(path, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+				if method == pluginabi.MethodHostAuthList {
+					return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+						{ID: name, Name: name, Provider: tc.provider, Path: path},
+					}}), nil
+				}
+				return hostOK(struct{}{}), nil
+			}}
+			cfg := config.Config{APIKeys: []config.APIKey{{Name: "Renamed", Value: "key-a"}}}
+			// Fresh managers exercise restarts as well as repeated initialization.
+			for range 2 {
+				m := NewManager(NewHostBridge(f.call))
+				if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if saves := len(f.callsOf(pluginabi.MethodHostAuthSave)); saves != 0 {
+				t.Fatalf("saved %d duplicate records for an existing key", saves)
+			}
+			if stored, err := os.ReadFile(path); err != nil || string(stored) != string(original) {
+				t.Fatal("existing credential state changed")
+			}
+		})
+	}
+}
+
+func TestMaterializeFindsUnlistedCredentialByKey(t *testing.T) {
+	dir := t.TempDir()
+	listed := filepath.Join(dir, "other.json")
+	path := filepath.Join(dir, "Personal.json")
+	original := []byte(`{"type":"deepseek","api_key":"key-a","disabled":true,"proxy_url":"http://localhost:9999","custom":"keep"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(listed, []byte(`{"type":"codex"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			// The host manager has not loaded the DeepSeek file yet.
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{ID: "other.json", Name: "other.json", Provider: "codex", Path: listed},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "Renamed", Value: "key-a"}, {Name: "Personal", Value: "key-b"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 1 {
+		t.Fatalf("auth saves=%d, want 1 (only the new key)", len(saves))
+	}
+	var req pluginapi.HostAuthSaveRequest
+	if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Name != "Personal-2.json" || !strings.Contains(string(req.JSON), credentialID("key-b")) {
+		t.Fatalf("saved %q with wrong record", req.Name)
+	}
+	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(original) {
+		t.Fatal("existing credential state changed")
+	}
+}
+
+func TestMaterializeStopsWhenExistingIdentityCannotBeRead(t *testing.T) {
+	for _, body := range []string{"", `{"type":"deepseek","api_key":"key-a"`, `{"type":"deepseek"}`} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "Personal.json")
+			if body != "" {
+				if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+				if method == pluginabi.MethodHostAuthList {
+					return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+						{ID: "Personal.json", Name: "Personal.json", Provider: ProviderID, Path: path},
+					}}), nil
+				}
+				return hostOK(struct{}{}), nil
+			}}
+			m := NewManager(NewHostBridge(f.call))
+			cfg := config.Config{APIKeys: []config.APIKey{{Name: "Personal", Value: "key-a"}}}
+			err := m.materializeAuthRecords(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("unreadable existing identity was treated as a missing credential")
+			}
+			if strings.Contains(err.Error(), "key-a") || strings.Contains(err.Error(), path) {
+				t.Fatal("materialization error exposes credential data")
+			}
+			if len(f.callsOf(pluginabi.MethodHostAuthSave)) != 0 {
+				t.Fatal("saved a duplicate after failing to read the existing credential")
+			}
+		})
+	}
+}
+
+func TestMaterializeAcceptsRemovedKeyIdentityWithoutDiskPath(t *testing.T) {
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{ID: credentialID("key-a"), Name: "Personal.json", Provider: ProviderID},
+				{ID: credentialID("removed-key"), Name: "Old.json", Provider: ProviderID},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	cfg := config.Config{APIKeys: []config.APIKey{{Name: "Personal", Value: "key-a"}, {Name: "Team", Value: "key-b"}}}
+	if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+		t.Fatalf("removed key's missing path blocked materialization: %v", err)
+	}
+	saves := f.callsOf(pluginabi.MethodHostAuthSave)
+	if len(saves) != 1 {
+		t.Fatalf("auth saves=%d, want 1 (only the new key)", len(saves))
+	}
+	var req pluginapi.HostAuthSaveRequest
+	if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Name != credentialID("key-b")+".json" {
+		t.Fatalf("saved %q, want the new key's filename", req.Name)
+	}
+}
+
+func TestMaterializeStopsWhenUnlistedCredentialCannotBeRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Personal.json")
+	if err := os.WriteFile(path, []byte(`{"type":"deepseek","api_key":"key-a"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("this platform or user can read files without read permissions")
+	}
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{ID: "other.json", Name: "other.json", Provider: "codex", Path: filepath.Join(dir, "other.json")},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	err := m.materializeAuthRecords(context.Background(), config.Config{APIKeys: []config.APIKey{{Name: "Personal", Value: "key-a"}}})
+	if err == nil {
+		t.Fatal("unreadable unlisted credential was treated as a missing credential")
+	}
+	if strings.Contains(err.Error(), "key-a") || strings.Contains(err.Error(), path) {
+		t.Fatal("materialization error exposes credential data")
+	}
+	if len(f.callsOf(pluginabi.MethodHostAuthSave)) != 0 {
+		t.Fatal("saved a duplicate after failing to read an unlisted credential")
+	}
+}

@@ -91,7 +91,7 @@ func TestNativeHostABI(t *testing.T) {
 	if err := os.WriteFile(overlayPath, overlay, 0644); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"TestDeepSeekNativeUnload"} {
+	for _, name := range []string{"TestDeepSeekNativeUnload", "TestDeepSeekNativeAuthIdempotency"} {
 		out := run(hostDir, "test", "-overlay", overlayPath, "-tags", "debug", "./internal/pluginhost", "-run", "^"+name+"$", "-count=1", "-timeout=90s", "-v")
 		t.Logf("%s", out)
 	}
