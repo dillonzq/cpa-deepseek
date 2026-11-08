@@ -110,6 +110,16 @@ func credentialID(key string) string {
 	digest := sha256.Sum256([]byte(key))
 	return "deepseek-key-" + hex.EncodeToString(digest[:])
 }
+
+func isCredentialID(id string) bool {
+	digest, ok := strings.CutPrefix(id, "deepseek-key-")
+	if !ok || len(digest) != sha256.Size*2 || digest != strings.ToLower(digest) {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
+}
+
 func accountLabel(cfg config.Config, key, stored string) string {
 	for _, credential := range cfg.APIKeys {
 		if credential.Value == key && credential.Name != "" {

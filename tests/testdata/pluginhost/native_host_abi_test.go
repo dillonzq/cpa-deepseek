@@ -3,19 +3,113 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestDeepSeekNativeAuthIdempotency(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, `{"data":[{"id":"deepseek-flash"}]}`)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	existingName := "deepseek-key-Personal.json"
+	if err := os.MkdirAll(filepath.Join(dir, "accounts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(dir, "accounts", existingName)
+	original := []byte(`{"type":"deepseek","api_key":"offline-a","disabled":true,"proxy_url":"http://localhost:9999","custom":"keep"}`)
+	otherPath := filepath.Join(dir, "Other.json")
+	for path, data := range map[string][]byte{existingPath: original, otherPath: []byte(`{"type":"codex"}`)} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := New()
+	host.runtimeConfig = &config.Config{AuthDir: dir}
+	file := pluginFile{ID: "cpa-deepseek", Path: os.Getenv("CPA_NATIVE_PLUGIN")}
+	native, err := defaultPluginLoader().Open(file, host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newGuardedPluginClient(native)
+	defer client.Shutdown()
+	settings := func(keys string) []byte {
+		return []byte(fmt.Sprintf("api-keys:\n%sbase-url: %s\nallow-http: true\n", keys, upstream.URL))
+	}
+	apply := func(method, keys string) {
+		t.Helper()
+		if _, err := registerRPCPlugin(ctx, host, file.ID, client, method, settings(keys)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertFiles := func(want int) {
+		t.Helper()
+		files, err := os.ReadDir(dir)
+		if err != nil || len(files) != want {
+			t.Fatalf("auth files=%d, want %d: %v", len(files), want, err)
+		}
+		stored, err := os.ReadFile(existingPath)
+		if err != nil || !bytes.Equal(stored, original) {
+			t.Fatal("materialization changed existing credential state")
+		}
+	}
+	// Startup's root listing omits nested files, which must still be preserved.
+	apply(pluginabi.MethodPluginRegister, "  - name: Personal\n    value: offline-a\n")
+	assertFiles(2)
+	// A live manager can list only some of the physical auth files.
+	manager := coreauth.NewManager(nil, nil, nil)
+	host.SetAuthManager(manager)
+	other, err := host.buildAuthFromFileData(otherPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Register(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	apply(pluginabi.MethodPluginReconfigure, "  - name: Renamed A\n    value: offline-a\n  - name: Team\n    value: offline-b\n")
+	assertFiles(3)
+	teamPath := filepath.Join(dir, "Team.json")
+	team, err := os.ReadFile(teamPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Host-saved IDs are paths, including nested readable filenames.
+	existing, err := host.buildAuthFromFileData(existingPath, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Register(ctx, existing); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		apply(pluginabi.MethodPluginReconfigure, "  - name: Renamed B\n    value: offline-b\n  - name: Renamed A\n    value: offline-a\n")
+		assertFiles(3)
+		if stored, err := os.ReadFile(teamPath); err != nil || !bytes.Equal(stored, team) {
+			t.Fatal("reconfiguration rewrote the new credential")
+		}
+	}
+}
 
 func TestDeepSeekNativeUnload(t *testing.T) {
 	started, canceled := make(chan bool, 2), make(chan bool, 2)

@@ -4,7 +4,10 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -230,6 +233,8 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	return registrationEnvelope(), nil
 }
 
+// materializeAuthRecords discovers identities before saving missing keys, while
+// reserving filenames independently to preserve existing files and host state.
 func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config) error {
 	if m.bridge == nil {
 		return fmt.Errorf("host bridge unavailable")
@@ -238,27 +243,83 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	if err != nil {
 		return err
 	}
-	existing := map[string]bool{}
+	existingIDs := map[string]bool{}
+	reservedNames := map[string]bool{}
+	listedPaths := make(map[string]bool, len(entries))
 	authDir := ""
 	for _, entry := range entries {
-		existing[entry.Name], existing[entry.ID] = true, true
-		if authDir == "" && filepath.IsAbs(entry.Path) {
-			authDir = filepath.Dir(entry.Path)
+		reservedNames[entry.Name], reservedNames[entry.ID] = true, true
+		if filepath.IsAbs(entry.Path) {
+			// A listing without provider metadata still needs a disk check.
+			if entry.Provider != "" || entry.Type != "" {
+				listedPaths[filepath.Clean(entry.Path)] = true
+			}
+			if authDir == "" {
+				authDir = filepath.Dir(entry.Path)
+			}
 		}
 		// v8 lists disk files without IDs before the auth manager is ready, and
 		// identifies host-saved files by path rather than the record's id.
-		// Readable filenames no longer encode identity, so recover it from the
-		// record itself; an unreadable record at worst yields one duplicate.
-		if (entry.Provider == ProviderID || entry.Type == ProviderID) && !strings.HasPrefix(entry.ID, "deepseek-key-") {
-			if key := readAuthRecordKey(entry.Path); key != "" {
-				existing[credentialID(key)] = true
+		// Only a full key digest establishes identity; a filename can also
+		// start with deepseek-key-. Never treat an unreadable identity as
+		// a missing credential and create a duplicate.
+		deepseek := entry.Provider == ProviderID || entry.Type == ProviderID
+		unknownProvider := entry.Provider == "" && entry.Type == ""
+		if (deepseek || unknownProvider) && isCredentialID(entry.ID) {
+			existingIDs[entry.ID] = true
+		} else if deepseek {
+			key, err := readAuthRecordKey(entry.Path)
+			if err != nil {
+				return err
 			}
+			if key == "" {
+				return fmt.Errorf("existing DeepSeek auth record is invalid")
+			}
+			existingIDs[credentialID(key)] = true
+		}
+	}
+	// A live auth manager may not have loaded every file yet. Discover keys
+	// from disk as well, before choosing a new name for any missing key.
+	if authDir != "" {
+		err := fs.WalkDir(os.DirFS(authDir), ".", func(relative string, file fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return fmt.Errorf("cannot read auth directory")
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if file.IsDir() || !strings.HasSuffix(strings.ToLower(file.Name()), ".json") {
+				return nil
+			}
+			path := filepath.Join(authDir, filepath.FromSlash(relative))
+			if filepath.Dir(path) == authDir {
+				reservedNames[file.Name()] = true
+			}
+			if listedPaths[path] {
+				return nil
+			}
+			// Invalid or unrelated unlisted files still reserve their names.
+			// A read failure leaves identity unknown, so do not risk a duplicate.
+			key, err := readAuthRecordKey(path)
+			if errors.Is(err, errReadAuthRecord) {
+				return err
+			}
+			if err == nil && key != "" {
+				existingIDs[credentialID(key)] = true
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 	}
 	for _, key := range cfg.APIKeys {
 		id := credentialID(key.Value)
-		if existing[id] || existing[id+".json"] {
+		if existingIDs[id] {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		label := accountLabel(cfg, key.Value, "")
 		// AuthSave overwrites, and AuthList can omit files the auth manager did
@@ -267,38 +328,64 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 		// the key-derived name, which only this key's record can occupy.
 		name := id + ".json"
 		if authDir != "" {
-			name = availableAuthName(label, existing)
+			name = availableAuthName(label, reservedNames)
 			for fileExists(filepath.Join(authDir, name)) {
-				existing[name] = true
-				name = availableAuthName(label, existing)
+				reservedNames[name] = true
+				name = availableAuthName(label, reservedNames)
 			}
+		} else if availableAuthName(id, reservedNames) != name {
+			return fmt.Errorf("existing credential filename has no verifiable identity")
 		}
 		record, _ := json.Marshal(map[string]any{"type": ProviderID, "id": id, "label": label, "api_key": key.Value})
 		if err := m.bridge.AuthSave(ctx, pluginapi.HostAuthSaveRequest{Name: name, JSON: record}); err != nil {
 			return err
 		}
-		existing[id], existing[name] = true, true
+		existingIDs[id], reservedNames[name] = true, true
 	}
 	return nil
 }
 
-// readAuthRecordKey reads the api_key of a host-reported auth file. It is
-// only used for identity; the key never reaches logs or errors.
-func readAuthRecordKey(path string) string {
+var errReadAuthRecord = errors.New("cannot read existing auth record")
+
+// readAuthRecordKey reads a DeepSeek file's api_key for identity only. Other
+// providers return an empty key; file contents and paths never reach errors.
+func readAuthRecordKey(path string) (string, error) {
 	if !filepath.IsAbs(path) {
-		return ""
+		return "", fmt.Errorf("existing DeepSeek auth record has no absolute path")
 	}
-	raw, err := os.ReadFile(path)
+	file, err := openAuthRecord(path)
 	if err != nil {
-		return ""
+		return "", errReadAuthRecord
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errReadAuthRecord
+	}
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		return "", errReadAuthRecord
+	}
+	// A replacement at the same path must not inherit the opened file's key.
+	current, err := os.Stat(path)
+	if err != nil || !os.SameFile(info, current) || !current.Mode().IsRegular() {
+		return "", errReadAuthRecord
 	}
 	var record struct {
+		Type   string `json:"type"`
 		APIKey string `json:"api_key"`
 	}
 	if json.Unmarshal(raw, &record) != nil {
-		return ""
+		return "", fmt.Errorf("existing DeepSeek auth record is invalid")
 	}
-	return strings.TrimSpace(record.APIKey)
+	if record.Type != ProviderID {
+		return "", nil
+	}
+	key := strings.TrimSpace(record.APIKey)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return "", fmt.Errorf("existing DeepSeek auth record has no valid api_key")
+	}
+	return key, nil
 }
 
 func fileExists(path string) bool {
