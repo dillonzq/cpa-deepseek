@@ -34,7 +34,10 @@ func TestDeepSeekNativeAuthIdempotency(t *testing.T) {
 	defer upstream.Close()
 	dir := t.TempDir()
 	existingName := "deepseek-key-Personal.json"
-	existingPath := filepath.Join(dir, existingName)
+	if err := os.MkdirAll(filepath.Join(dir, "accounts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(dir, "accounts", existingName)
 	original := []byte(`{"type":"deepseek","api_key":"offline-a","disabled":true,"proxy_url":"http://localhost:9999","custom":"keep"}`)
 	otherPath := filepath.Join(dir, "Other.json")
 	for path, data := range map[string][]byte{existingPath: original, otherPath: []byte(`{"type":"codex"}`)} {
@@ -71,7 +74,7 @@ func TestDeepSeekNativeAuthIdempotency(t *testing.T) {
 			t.Fatal("materialization changed existing credential state")
 		}
 	}
-	// Startup uses ID-less disk entries and must preserve the existing file.
+	// Startup's root listing omits nested files, which must still be preserved.
 	apply(pluginabi.MethodPluginRegister, "  - name: Personal\n    value: offline-a\n")
 	assertFiles(2)
 	// A live manager can list only some of the physical auth files.
@@ -91,7 +94,7 @@ func TestDeepSeekNativeAuthIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Host-saved IDs are filenames, including names with deepseek-key-.
+	// Host-saved IDs are paths, including nested readable filenames.
 	existing, err := host.buildAuthFromFileData(existingPath, original)
 	if err != nil {
 		t.Fatal(err)

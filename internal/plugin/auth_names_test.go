@@ -348,3 +348,113 @@ func TestMaterializeStopsWhenUnlistedCredentialCannotBeRead(t *testing.T) {
 		t.Fatal("saved a duplicate after failing to read an unlisted credential")
 	}
 }
+
+// Nested credentials must keep their original files and host-managed state.
+func TestMaterializeFindsUnlistedNestedCredential(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "accounts", "personal")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(nested, "Personal.JSON")
+	original := []byte(`{"type":"deepseek","api_key":"key-a","disabled":true,"proxy_url":"http://localhost:9999","custom":"keep"}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{Name: "Other.json", Provider: "codex", Path: filepath.Join(dir, "Other.json")},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	for range 2 {
+		m := NewManager(NewHostBridge(f.call))
+		cfg := config.Config{APIKeys: []config.APIKey{{Name: "Renamed", Value: "key-a"}}}
+		if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.callsOf(pluginabi.MethodHostAuthSave)) != 0 {
+		t.Fatal("saved a duplicate of a nested credential")
+	}
+	if stored, err := os.ReadFile(path); err != nil || string(stored) != string(original) {
+		t.Fatal("nested credential state changed")
+	}
+}
+
+// A digest-shaped filename reserves a name but does not identify its contents.
+func TestMaterializeSeparatesReservedNamesFromIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, provider string
+		listed               bool
+	}{
+		{"unlisted invalid JSON", `not json`, "", false},
+		{"unlisted other key", `{"type":"deepseek","api_key":"key-b"}`, ProviderID, false},
+		{"unlisted other provider", `{"type":"codex","api_key":"key-a"}`, "codex", false},
+		{"listed other key", `{"type":"deepseek","api_key":"key-b"}`, ProviderID, true},
+		{"listed other provider", `{"type":"codex","api_key":"key-a"}`, "codex", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			name := credentialID("key-a") + ".json"
+			path := filepath.Join(dir, name)
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+				if method == pluginabi.MethodHostAuthList {
+					entries := []pluginapi.HostAuthFileEntry{{Name: "Other.json", Provider: "codex", Path: filepath.Join(dir, "Other.json")}}
+					if tc.listed {
+						entries = append(entries, pluginapi.HostAuthFileEntry{ID: name, Name: name, Provider: tc.provider, Path: path})
+					}
+					return hostOK(hostAuthListResponse{Files: entries}), nil
+				}
+				return hostOK(struct{}{}), nil
+			}}
+			m := NewManager(NewHostBridge(f.call))
+			cfg := config.Config{APIKeys: []config.APIKey{{Name: strings.TrimSuffix(name, ".json"), Value: "key-a"}}}
+			if err := m.materializeAuthRecords(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			saves := f.callsOf(pluginabi.MethodHostAuthSave)
+			if len(saves) != 1 {
+				t.Fatalf("auth saves=%d, want 1 for the missing key", len(saves))
+			}
+			var req pluginapi.HostAuthSaveRequest
+			if err := json.Unmarshal(saves[0].payload, &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.Name != strings.TrimSuffix(name, ".json")+"-2.json" {
+				t.Fatalf("saved %q over an occupied name", req.Name)
+			}
+			var record authRecord
+			if err := json.Unmarshal(req.JSON, &record); err != nil || record.APIKey != "key-a" {
+				t.Fatal("saved the wrong credential")
+			}
+			if stored, err := os.ReadFile(path); err != nil || string(stored) != tc.body {
+				t.Fatal("occupied credential file changed")
+			}
+		})
+	}
+}
+
+// An occupied fallback filename cannot be overwritten without verifying its key.
+func TestMaterializeRejectsUnverifiableFallbackFilename(t *testing.T) {
+	f := &fakeCaller{responder: func(method string, _ []byte) ([]byte, error) {
+		if method == pluginabi.MethodHostAuthList {
+			return hostOK(hostAuthListResponse{Files: []pluginapi.HostAuthFileEntry{
+				{Name: credentialID("key-a") + ".json"},
+			}}), nil
+		}
+		return hostOK(struct{}{}), nil
+	}}
+	m := NewManager(NewHostBridge(f.call))
+	if err := m.materializeAuthRecords(context.Background(), config.Config{APIKeys: []config.APIKey{{Value: "key-a"}}}); err == nil {
+		t.Fatal("occupied fallback filename was accepted without verifying its key")
+	}
+	if len(f.callsOf(pluginabi.MethodHostAuthSave)) != 0 {
+		t.Fatal("overwrote an unverifiable fallback credential")
+	}
+}
