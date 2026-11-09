@@ -12,3 +12,7 @@ import (
 func openAuthRecord(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 }
+
+func openCleanupRecord(root *os.Root, name string, flag int) (*os.File, error) {
+	return root.OpenFile(name, flag|syscall.O_NONBLOCK, 0)
+}
