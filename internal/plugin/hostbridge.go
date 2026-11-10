@@ -35,13 +35,15 @@ type HostBridge struct {
 	inFlight         sync.WaitGroup
 	streamMu         sync.Mutex
 	streamOperations map[string]*httpOperation
+	// Held until the actual auth write returns, including after a timeout.
+	authWrite chan struct{}
 }
 
 // NewHostBridge wraps the injected raw host caller so the bridge satisfies
 // catalog.HostClient. main.go wires it to the C host API after init;
 // tests inject fakes.
 func NewHostBridge(call RawCaller) *HostBridge {
-	return &HostBridge{call: call, streamOperations: make(map[string]*httpOperation)}
+	return &HostBridge{call: call, streamOperations: make(map[string]*httpOperation), authWrite: make(chan struct{}, 1)}
 }
 
 // hostHTTPReq is the wire shape accepted by host.http.do / do_stream.
@@ -73,7 +75,33 @@ func (b *HostBridge) AuthSave(ctx context.Context, req pluginapi.HostAuthSaveReq
 	if err != nil {
 		return fmt.Errorf("host auth save failed: invalid request")
 	}
-	raw, err := b.callWithTimeout(ctx, pluginabi.MethodHostAuthSave, payload)
+	if err := b.lockAuthWrite(ctx); err != nil {
+		return err
+	}
+	type result struct {
+		raw []byte
+		err error
+	}
+	done := make(chan result, 1)
+	b.inFlight.Add(1)
+	go func() {
+		defer b.inFlight.Done()
+		defer func() { <-b.authWrite }()
+		defer func() {
+			if recover() != nil {
+				done <- result{err: fmt.Errorf("host callback panicked")}
+			}
+		}()
+		raw, err := b.call(pluginabi.MethodHostAuthSave, payload)
+		done <- result{raw, err}
+	}()
+	var raw []byte
+	select {
+	case res := <-done:
+		raw, err = res.raw, res.err
+	case <-ctx.Done():
+		return fmt.Errorf("host auth save failed: timed out")
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
 			return fmt.Errorf("host auth save failed: timed out")
@@ -88,6 +116,27 @@ func (b *HostBridge) AuthSave(ctx context.Context, req pluginapi.HostAuthSaveReq
 		// Host error text is not trusted and may echo credential JSON.
 		return fmt.Errorf("host auth save failed")
 	}
+	return nil
+}
+
+func (b *HostBridge) lockAuthWrite(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("host auth write unavailable")
+	}
+	select {
+	case b.authWrite <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("host auth write still pending")
+	}
+}
+
+// Do not inspect files while a timed-out callback may still overwrite them.
+func (b *HostBridge) waitAuthWrite(ctx context.Context) error {
+	if err := b.lockAuthWrite(ctx); err != nil {
+		return err
+	}
+	<-b.authWrite
 	return nil
 }
 

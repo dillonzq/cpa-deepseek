@@ -9,3 +9,7 @@ import "os"
 func openAuthRecord(path string) (*os.File, error) {
 	return os.Open(path)
 }
+
+func openCleanupRecord(root *os.Root, name string, flag int) (*os.File, error) {
+	return root.OpenFile(name, flag, 0)
+}

@@ -43,6 +43,7 @@ type Manager struct {
 	cancelWork context.CancelFunc
 	mu         sync.RWMutex
 	cfg        config.Config
+	authDirs   []string // Last host-reported directories; guarded by mu.
 	mgr        *catalog.Manager
 	stop       chan struct{}
 	done       chan struct{}
@@ -199,11 +200,14 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	m.mu.RLock()
 	previous := m.mgr
 	m.mu.RUnlock()
-	if cfg.Catalog.StaleWhileUnavailable {
+	if len(cfg.APIKeys) > 0 && cfg.Catalog.StaleWhileUnavailable {
 		catalogue.SeedFrom(previous)
 	}
 	discoveryCtx, cancelDiscovery := context.WithTimeout(m.workContext(), initialDiscoveryTimeout)
-	discoveryErr := catalogue.Refresh(discoveryCtx)
+	var discoveryErr error
+	if len(cfg.APIKeys) > 0 {
+		discoveryErr = catalogue.Refresh(discoveryCtx)
+	}
 	cancelDiscovery()
 	if err := discoveryErr; err != nil {
 		if len(catalogue.Models()) == 0 {
@@ -218,8 +222,10 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	// remain usable. Give credential initialization its own bounded context.
 	ctx, cancel := context.WithTimeout(m.workContext(), 10*time.Second)
 	defer cancel()
-	if err := m.materializeAuthRecords(ctx, cfg); err != nil {
-		return ErrEnvelope("auth_materialization_failed", err.Error()), nil
+	if len(cfg.APIKeys) > 0 {
+		if err := m.materializeAuthRecords(ctx, cfg); err != nil {
+			return ErrEnvelope("auth_materialization_failed", err.Error()), nil
+		}
 	}
 	if done := m.closeStop(); done != nil {
 		<-done
@@ -230,6 +236,13 @@ func (m *Manager) handleLifecycle(data []byte) ([]byte, error) {
 	m.stop, m.done = stop, done
 	m.mu.Unlock()
 	m.startRefreshLoop(cfg, catalogue, stop, done)
+	// Install the new membership first: even a cleanup failure must not let a
+	// removed key execute. Files left by a failed cleanup are retried on reload.
+	if err := m.cleanupAuthRecords(ctx, cfg); err != nil {
+		if m.bridge != nil {
+			_ = m.bridge.Log("warn", "DeepSeek credential cleanup incomplete; reload to retry and check the auth directory for *.deepseek-cleanup-* files", map[string]any{"reason": err.Error()})
+		}
+	}
 	return registrationEnvelope(), nil
 }
 
@@ -239,10 +252,14 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	if m.bridge == nil {
 		return fmt.Errorf("host bridge unavailable")
 	}
+	if err := m.bridge.waitAuthWrite(ctx); err != nil {
+		return err
+	}
 	entries, err := m.bridge.AuthList(ctx)
 	if err != nil {
 		return err
 	}
+	m.rememberAuthDirs(entries)
 	existingIDs := map[string]bool{}
 	reservedNames := map[string]bool{}
 	listedPaths := make(map[string]bool, len(entries))
@@ -442,9 +459,10 @@ func isWindowsDeviceName(base string) bool {
 func (m *Manager) handleModels(active bool) ([]byte, error) {
 	m.mu.RLock()
 	catalogue := m.mgr
+	configured := len(m.cfg.APIKeys) > 0
 	m.mu.RUnlock()
 	models := make([]pluginapi.ModelInfo, 0)
-	if active && catalogue != nil {
+	if active && catalogue != nil && configured {
 		for _, r := range catalogue.Models() {
 			models = append(models, pluginapi.ModelInfo{ID: r.PublicID, Object: "model", OwnedBy: ProviderID,
 				Name: r.UpstreamID, DisplayName: r.DisplayName, Description: r.Description,
@@ -508,6 +526,10 @@ func (m *Manager) closeStop() chan struct{} {
 }
 
 func (m *Manager) startRefreshLoop(cfg config.Config, catalogue *catalog.Manager, stop, done chan struct{}) {
+	if len(cfg.APIKeys) == 0 {
+		close(done)
+		return
+	}
 	ctx, cancel := context.WithCancel(m.workContext())
 	go func() {
 		select {

@@ -26,7 +26,7 @@ func TestRejectInvalidConfigurationWithoutLeakingValues(t *testing.T) {
 	for _, tc := range []string{
 		"api-keys: [sensitive-secret-123]", "api-key: sensitive-secret-123",
 		"api-keys: [{api-key: sensitive-secret-123}]",
-		"api-keys: [{value: valid-key, api-key: sensitive-secret-123}]", "api-keys: []", base + "unknown: sensitive-secret-123\n",
+		"api-keys: [{value: valid-key, api-key: sensitive-secret-123}]", base + "unknown: sensitive-secret-123\n",
 		base + "---\napi-keys: []", base + "base-url: https://user:sensitive-secret-123@example.test\n",
 		base + "base-url: http://example.test\n", base + "base-url: https://example.test?key=sensitive-secret-123\n",
 		base + "base-url: file:///tmp/key\n", base + "quota: {timeout: 0s}\n", base + "quota: {timeout: 2m}\n",

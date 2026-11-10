@@ -95,6 +95,6 @@ func TestNativeHostABI(t *testing.T) {
 		out := run(hostDir, "test", "-overlay", overlayPath, "-tags", "debug", "./internal/pluginhost", "-run", "^"+name+"$", "-count=1", "-timeout=90s", "-v")
 		t.Logf("%s", out)
 	}
-	out := run(hostDir, "test", "-overlay", overlayPath, "-tags", "debug", "./internal/api/handlers/management", "-run", "^TestDeepSeekNativeQuotaAndCooldown$", "-count=1", "-timeout=90s", "-v")
+	out := run(hostDir, "test", "-overlay", overlayPath, "-tags", "debug", "./internal/api/handlers/management", "-run", "^TestDeepSeekNative(QuotaAndCooldown|CredentialCleanup)$", "-count=1", "-timeout=90s", "-v")
 	t.Logf("%s", out)
 }

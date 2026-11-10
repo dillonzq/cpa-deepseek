@@ -243,9 +243,6 @@ func (c Config) validate() error {
 	if err := validateURL("base-url", c.BaseURL, c.AllowHTTP); err != nil {
 		return err
 	}
-	if len(c.APIKeys) == 0 {
-		return fmt.Errorf("api-keys: at least one key is required")
-	}
 	if len(c.APIKeys) > MaxAPIKeys {
 		return fmt.Errorf("api-keys: at most %d keys are allowed", MaxAPIKeys)
 	}
