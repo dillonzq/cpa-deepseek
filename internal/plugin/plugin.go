@@ -43,6 +43,7 @@ type Manager struct {
 	cancelWork context.CancelFunc
 	mu         sync.RWMutex
 	cfg        config.Config
+	authDirs   []string // Last host-reported directories; guarded by mu.
 	mgr        *catalog.Manager
 	stop       chan struct{}
 	done       chan struct{}
@@ -258,6 +259,7 @@ func (m *Manager) materializeAuthRecords(ctx context.Context, cfg config.Config)
 	if err != nil {
 		return err
 	}
+	m.rememberAuthDirs(entries)
 	existingIDs := map[string]bool{}
 	reservedNames := map[string]bool{}
 	listedPaths := make(map[string]bool, len(entries))

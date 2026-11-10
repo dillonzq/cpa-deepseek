@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,69 @@ import (
 	"github.com/dillonzq/cpa-deepseek/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
+
+// Keep the last exposed directories so a temporarily empty runtime listing
+// cannot hide files when the last configured key is removed.
+func (m *Manager) rememberAuthDirs(entries []pluginapi.HostAuthFileEntry) {
+	dirs := []string{}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.RuntimeOnly || !filepath.IsAbs(entry.Path) {
+			continue
+		}
+		dir := filepath.Dir(entry.Path)
+		if !seen[dir] {
+			seen[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+	if len(dirs) > 0 {
+		m.mu.Lock()
+		m.authDirs = dirs
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) discoverCleanupFiles(ctx context.Context, entries []pluginapi.HostAuthFileEntry) ([]pluginapi.HostAuthFileEntry, error) {
+	m.rememberAuthDirs(entries)
+	m.mu.RLock()
+	dirs := append([]string(nil), m.authDirs...)
+	m.mu.RUnlock()
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if filepath.IsAbs(entry.Path) {
+			seen[filepath.Clean(entry.Path)] = true
+		}
+	}
+	for _, dir := range dirs {
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			return nil, fmt.Errorf("open credential directory for discovery failed")
+		}
+		err = fs.WalkDir(root.FS(), ".", func(relative string, file fs.DirEntry, walkErr error) error {
+			if ctx.Err() != nil {
+				return fmt.Errorf("credential discovery canceled")
+			}
+			if walkErr != nil {
+				return fmt.Errorf("scan credential directory failed")
+			}
+			if !file.Type().IsRegular() || !strings.EqualFold(filepath.Ext(file.Name()), ".json") {
+				return nil // WalkDir does not follow symbolic links.
+			}
+			path := filepath.Join(dir, filepath.FromSlash(relative))
+			if !seen[path] {
+				seen[path] = true
+				entries = append(entries, pluginapi.HostAuthFileEntry{Name: file.Name(), Path: path, Source: "file"})
+			}
+			return nil
+		})
+		_ = root.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return entries, nil
+}
 
 // Cleanup uses physical records, not host IDs (which can be filenames). Only
 // records with our type and the exact ID we generate from their key are owned.
@@ -27,6 +91,10 @@ func (m *Manager) cleanupAuthRecords(ctx context.Context, cfg config.Config) err
 		return err
 	}
 	entries, err := m.bridge.AuthList(ctx)
+	if err != nil {
+		return err
+	}
+	entries, err = m.discoverCleanupFiles(ctx, entries)
 	if err != nil {
 		return err
 	}
@@ -44,7 +112,7 @@ func (m *Manager) cleanupAuthRecords(ctx context.Context, cfg config.Config) err
 
 func (m *Manager) cleanupAuthFile(ctx context.Context, cfg config.Config, entry pluginapi.HostAuthFileEntry) error {
 	name := entry.Name
-	if !filepath.IsAbs(entry.Path) || filepath.Base(entry.Path) != name || strings.ContainsAny(name, `/\`) || !strings.HasSuffix(name, ".json") {
+	if !filepath.IsAbs(entry.Path) || filepath.Base(entry.Path) != name || strings.ContainsAny(name, `/\`) || !strings.EqualFold(filepath.Ext(name), ".json") {
 		return nil // No usable physical file, e.g. a runtime-only host listing.
 	}
 	root, err := os.OpenRoot(filepath.Dir(entry.Path))
@@ -67,13 +135,26 @@ func (m *Manager) cleanupAuthFile(ctx context.Context, cfg config.Config, entry 
 	}
 	// The v8.0.0 host save callback does not apply the disabled flag to its
 	// runtime Auth. Write the file and let CPA's normal directory watcher parse
-	// it, then require the runtime listing to confirm before unlinking. During
-	// cold start there is no runtime index yet, so there is no scheduler entry
-	// that could rewrite the file.
-	if entry.AuthIndex != "" {
-		if err := disableCleanupFile(root, name, record.ID); err != nil {
+	// it, then require known runtime credentials to be explicitly disabled
+	// before unlinking. Discovered disk-only files are also written disabled
+	// and checked for runtime attachment before deletion.
+	if err := disableCleanupFile(root, name, record.ID); err != nil {
+		return err
+	}
+	// A discovered file may have become loaded since the original listing.
+	if entry.AuthIndex == "" {
+		latest, err := m.bridge.AuthList(ctx)
+		if err != nil {
 			return err
 		}
+		for _, current := range latest {
+			if current.AuthIndex != "" && current.Path == entry.Path {
+				entry.AuthIndex = current.AuthIndex
+				break
+			}
+		}
+	}
+	if entry.AuthIndex != "" {
 		if err := m.awaitDisabledAuth(ctx, entry); err != nil {
 			return err
 		}
@@ -88,7 +169,7 @@ func (m *Manager) cleanupAuthFile(ctx context.Context, cfg config.Config, entry 
 		return fmt.Errorf("stage credential deletion failed")
 	}
 	_, current, readErr := readCleanupRecord(root, staged)
-	if readErr != nil || current == nil || current.ID != record.ID || entry.AuthIndex != "" && !current.Disabled {
+	if readErr != nil || current == nil || current.ID != record.ID || !current.Disabled {
 		if err := restoreCleanupFile(root, staged, name); err != nil {
 			return err
 		}
@@ -163,16 +244,21 @@ func (m *Manager) awaitDisabledAuth(ctx context.Context, entry pluginapi.HostAut
 		if err != nil {
 			return fmt.Errorf("confirm disabled credential failed")
 		}
-		active := false
+		active, confirmed := false, false
 		for _, current := range entries {
 			if current.AuthIndex == entry.AuthIndex || current.Path == entry.Path {
+				if current.RuntimeOnly || current.Path != entry.Path {
+					active = true
+					continue
+				}
+				confirmed = true
 				if !current.Disabled && current.Status != "disabled" {
 					active = true
 				}
 			}
 		}
-		if !active {
-			return nil // All matching records are disabled or already removed.
+		if confirmed && !active {
+			return nil // A matching physical record was explicitly disabled.
 		}
 		select {
 		case <-ctx.Done():

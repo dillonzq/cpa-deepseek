@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,6 +279,108 @@ func TestCleanupRestoreDoesNotOverwriteNewFile(t *testing.T) {
 		got, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("restoration lost credential %s", name)
+		}
+	}
+}
+
+func TestCleanupWaitsForExplicitFileBackedDisable(t *testing.T) {
+	for _, mode := range []string{"empty", "unrelated", "runtime-only", "wrong-path"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			writeCleanupAuth(t, dir, "pending.JSON", "removed")
+			entry := pluginapi.HostAuthFileEntry{Name: "pending.JSON", Path: filepath.Join(dir, "pending.JSON"), AuthIndex: "target"}
+			listed := entry
+			listed.Disabled = true
+			if mode == "unrelated" {
+				listed.Path, listed.AuthIndex = filepath.Join(dir, "other.json"), "other"
+			}
+			if mode == "runtime-only" {
+				listed.RuntimeOnly = true
+			}
+			if mode == "wrong-path" {
+				listed.Path = filepath.Join(dir, "other.json")
+			}
+			bridge := NewHostBridge(func(string, []byte) ([]byte, error) {
+				entries := []pluginapi.HostAuthFileEntry{listed}
+				if mode == "empty" {
+					entries = nil
+				}
+				return hostOK(hostAuthListResponse{Files: entries}), nil
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+			defer cancel()
+			if err := NewManager(bridge).cleanupAuthFile(ctx, config.Config{}, entry); err == nil {
+				t.Fatal("missing physical disable confirmation accepted")
+			}
+			if _, err := os.Stat(entry.Path); err != nil {
+				t.Fatal("unconfirmed file removed")
+			}
+		})
+	}
+	// A transient empty list must be retried until the actual file is disabled.
+	entry := pluginapi.HostAuthFileEntry{Path: "/test/target.json", AuthIndex: "target", Disabled: true}
+	calls := 0
+	bridge := NewHostBridge(func(string, []byte) ([]byte, error) {
+		calls++
+		entries := []pluginapi.HostAuthFileEntry{}
+		if calls > 1 {
+			entries = append(entries, entry)
+		}
+		return hostOK(hostAuthListResponse{Files: entries}), nil
+	})
+	if err := NewManager(bridge).awaitDisabledAuth(context.Background(), entry); err != nil || calls < 2 {
+		t.Fatalf("did not wait for explicit confirmation: %v", err)
+	}
+}
+
+func TestCleanupDiscoversUnlistedAndNestedFiles(t *testing.T) {
+	for _, keyless := range []bool{false, true} {
+		for _, emptyList := range []bool{false, true} {
+			t.Run(fmt.Sprintf("keyless=%t/empty=%t", keyless, emptyList), func(t *testing.T) {
+				dir := t.TempDir()
+				if err := os.Mkdir(filepath.Join(dir, "nested"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				writeCleanupAuth(t, dir, "removed.JSON", "removed")
+				writeCleanupAuth(t, filepath.Join(dir, "nested"), "removed.JsOn", "nested-removed")
+				kept := writeCleanupAuth(t, dir, "kept.json", "kept")
+				foreign := filepath.Join(dir, "other.json")
+				if err := os.WriteFile(foreign, []byte(`{"type":"codex"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+				listed := []pluginapi.HostAuthFileEntry{{Name: "other.json", Path: foreign, Provider: "codex"}}
+				bridge := NewHostBridge(func(string, []byte) ([]byte, error) {
+					if emptyList {
+						return hostOK(hostAuthListResponse{}), nil
+					}
+					return hostOK(hostAuthListResponse{Files: listed}), nil
+				})
+				m := NewManager(bridge)
+				m.rememberAuthDirs(listed)
+				cfg := config.Config{}
+				if !keyless {
+					cfg.APIKeys = []config.APIKey{{Value: "kept"}}
+				}
+				if err := m.cleanupAuthRecords(context.Background(), cfg); err != nil {
+					t.Fatal(err)
+				}
+				for _, path := range []string{filepath.Join(dir, "removed.JSON"), filepath.Join(dir, "nested", "removed.JsOn")} {
+					if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("unlisted credential remains")
+					}
+				}
+				got, err := os.ReadFile(filepath.Join(dir, "kept.json"))
+				if keyless {
+					if !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("keyless cleanup retained credential")
+					}
+				} else if err != nil || !bytes.Equal(got, kept) {
+					t.Fatal("configured credential changed")
+				}
+				if got, err := os.ReadFile(foreign); err != nil || string(got) != `{"type":"codex"}` {
+					t.Fatal("foreign file changed")
+				}
+			})
 		}
 	}
 }

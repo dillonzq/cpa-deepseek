@@ -4,6 +4,7 @@ package management
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -121,6 +122,23 @@ func TestDeepSeekNativeCredentialCleanup(t *testing.T) {
 		}
 	}
 	waitFor(func() bool { return len(manager.List()) == 2 })
+	// CPA's live manager and root-directory watcher do not list this nested
+	// file. Cleanup must discover it on disk, including its uppercase suffix.
+	writeUnlisted := func(name string) string {
+		t.Helper()
+		nested := filepath.Join(authDir, "nested")
+		if err := os.MkdirAll(nested, 0700); err != nil {
+			t.Fatal(err)
+		}
+		key := "unlisted-" + name
+		data := fmt.Sprintf(`{"type":"deepseek","id":"deepseek-key-%x","api_key":%q}`, sha256.Sum256([]byte(key)), key)
+		path := filepath.Join(nested, name)
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	unlisted := writeUnlisted("Removed.JSON")
 	var removedID, removedPath, keptPath string
 	for _, auth := range manager.List() {
 		if auth.Attributes["api_key"] == "offline-a" {
@@ -133,6 +151,9 @@ func TestDeepSeekNativeCredentialCleanup(t *testing.T) {
 		t.Fatal("watcher did not parse plugin credentials")
 	}
 	apply("[{name: B, value: offline-b}]")
+	if _, err := os.Stat(unlisted); !os.IsNotExist(err) {
+		t.Fatal("unlisted nested credential was not cleaned up")
+	}
 	if _, err := os.Stat(removedPath); !os.IsNotExist(err) {
 		t.Fatal("removed key's file still exists")
 	}
@@ -142,7 +163,11 @@ func TestDeepSeekNativeCredentialCleanup(t *testing.T) {
 	if _, err := os.Stat(keptPath); err != nil {
 		t.Fatal("configured credential was removed")
 	}
+	unlisted = writeUnlisted("Idle.JsOn")
 	apply("[]")
+	if _, err := os.Stat(unlisted); !os.IsNotExist(err) {
+		t.Fatal("keyless cleanup missed unlisted nested credential")
+	}
 	waitFor(func() bool {
 		for _, auth := range manager.List() {
 			if !auth.Disabled {
@@ -152,12 +177,12 @@ func TestDeepSeekNativeCredentialCleanup(t *testing.T) {
 		return true
 	})
 	files, err := os.ReadDir(authDir)
-	if err != nil || len(files) != 0 {
+	if err != nil || len(files) != 1 || files[0].Name() != "nested" {
 		t.Fatal("keyless plugin retained credential files")
 	}
 	// Re-running config application must not resurrect either removed record.
 	apply("[]")
-	if files, _ := os.ReadDir(authDir); len(files) != 0 {
+	if files, _ := os.ReadDir(authDir); len(files) != 1 || files[0].Name() != "nested" {
 		t.Fatal("reload recreated removed credentials")
 	}
 }
